@@ -24,3 +24,6 @@
 
 ## 2.3 移动修正，主要是针对v1的移动脚本，丢失/home/username 的情况
 - `move_home_Repairblind.sh`
+
+## 2.4 搜索用户占磁盘空间脚本
+- `02-Storage/user_disk_usage.sh`

@@ -13,4 +13,14 @@
 - `bash ./01-UserControl/clean_user.sh`
 
 # 2. 存储维护脚本
-`./store/`文件夹
+`./02-Storage/`文件夹
+
+## 2.1 移动用户整体到另外的磁盘，并用mount 挂载，保证/home/username正常
+- 修改`02-Storage/move_home2.sh`中的 `USERNAME`
+- `bash ./02-Storage/move_home2.sh`
+
+## 2.2 移动部分文件，保证权限不变
+- `bash move_project_to_mnt.sh`
+
+## 2.3 移动修正，主要是针对v1的移动脚本，丢失/home/username 的情况
+- `move_home_Repairblind.sh`

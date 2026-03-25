@@ -12,6 +12,10 @@
 - 修改`01-UserControl/clean_user.sh` 中 `USER` 变量
 - `bash ./01-UserControl/clean_user.sh`
 
+## 1.3 列出用户，及其占用大小和位置
+- `bash ./01-UserControl/whole_user.sh` 默认仅显示普通可登录用户
+- `bash ./01-UserControl/whole_user.sh --all` 显示全部账户（含系统账户）
+
 # 2. 存储维护脚本
 `./02-Storage/`文件夹
 
@@ -27,3 +31,6 @@
 
 ## 2.4 搜索用户占磁盘空间脚本
 - `02-Storage/user_disk_usage.sh`
+
+## 2.5 迁移某文件夹，恢复权限
+- `02-Storage/migrate.sh`

@@ -1,4 +1,13 @@
 #!/bin/bash
+# 01-UserControl/user_disk_usage.sh - 统计每个用户的磁盘占用情况（按分区统计）
+
+# 【用户】banana | 家目录：/home/banana
+#  💽 磁盘分区：/dev/mapper/ubuntu--vg-ubuntu--lv
+#  📂 所在挂载：/
+#  📊 占用空间：888M
+#  📦 分区容量：总 490G | 已用 455G | 可用 10G
+#--------------------------------------------------------
+
 
 # 非 root 直接退出
 if [ $EUID -ne 0 ]; then

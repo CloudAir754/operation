@@ -1,22 +1,34 @@
 #!/bin/bash
+# whole_user.sh - 列出系统中的用户账户信息（列出用户 + 基本信息 + （顺带）简单磁盘情况-包括大小和磁盘位置）
 # 这个脚本用于列出所有用户
 # 默认仅显示可登录的普通用户；传入 --all 可显示全部系统账户。
+# --size 检查目录大小（执行 du），默认不检查。
+
+#USERNAME             UID      GID      HOME                         REALNAME     DIR SIZE     DISK
+#--------             ---      ---      ----                         --------     --------     ----
+#banana               1000     1000     /home/banana                 banana       888M         /dev/mapper/ubuntu--vg-ubuntu--lv
+
 
 set -euo pipefail
 
 PASSWD_FILE="/etc/passwd"
 LOGIN_DEFS_FILE="/etc/login.defs"
 SHOW_ALL=0
+CHECK_DIR_SIZE=0
 
 usage() {
 	echo "用法: bash ./01-UserControl/whole_user.sh [--all]"
 	echo "  --all   显示全部账户（含系统账户）"
+	echo "  --size      检查目录大小（执行 du）"
 }
 
 for arg in "$@"; do
 	case "$arg" in
 		--all)
 			SHOW_ALL=1
+			;;
+		--size)
+			CHECK_DIR_SIZE=1
 			;;
 		-h|--help)
 			usage
@@ -65,7 +77,11 @@ while IFS=: read -r username _ uid gid gecos home shell; do
 	real_home=$(readlink -f "$home" 2>/dev/null || echo "$home")
 
 	if [ -d "$real_home" ]; then
-		dir_size=$(du -sh "$real_home" | awk '{print $1}')
+		if [ "$CHECK_DIR_SIZE" -eq 1 ]; then
+			dir_size=$(du -sh "$real_home" | awk '{print $1}')
+		else
+			dir_size="-"
+		fi
 		disk=$(df "$real_home" | awk 'NR==2 {print $1}')
 	else
 		dir_size="N/A"

@@ -53,6 +53,7 @@ if [ -e "${DST_DIR}" ]; then
 fi
 
 OWNER_UID_GID=$(stat -c '%u:%g' "${SRC_DIR}")
+SRC_MODE=$(stat -c '%a' "${SRC_DIR}") # 获取源目录权限模式（八进制）
 
 echo "✅ 所有检查通过，开始迁移..."
 
@@ -87,7 +88,11 @@ echo "→ 复制（带进度）：${SRC_DIR} → ${DST_DIR}"
 mkdir -p "${DST_DIR}"
 rsync -aHAX --numeric-ids --info=progress2 --human-readable "${SRC_DIR}/" "${DST_DIR}/"
 
-# 2.1 复制成功后删除源目录
+# 2.1 修正目标目录本身的元数据（rsync 上面复制的是内容，不会自动继承目录壳的权限）
+chown "${OWNER_UID_GID}" "${DST_DIR}"
+chmod "${SRC_MODE}" "${DST_DIR}"
+
+# 2.2 复制成功后删除源目录
 echo "→ 复制完成，清理源目录：${SRC_DIR}"
 rm -rf "${SRC_DIR}"
 

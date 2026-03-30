@@ -34,3 +34,28 @@
 
 ## 2.5 迁移某文件夹，恢复权限
 - `02-Storage/migrate.sh`
+
+## 2.6 扫描大目录占用（增强版）
+- 脚本：`02-Storage/search_size.sh`
+- 作用：扫描大目录，显示目录大小、目录所有者、逻辑分区、挂载点、物理硬盘。
+- 特性：按 `dev+inode` 去重，避免同一目录通过多个挂载入口重复显示。
+- 说明：脚本在扫描阶段会忽略少量临时不可访问目录（如 `/proc`）导致的 `du` 非零返回码，不会因此提前退出。
+
+### 用法
+- `sudo bash ./02-Storage/search_size.sh`
+- `sudo bash ./02-Storage/search_size.sh --threshold 100G --depth 3 --top 50`
+- `sudo bash ./02-Storage/search_size.sh --scan-root /home --scan-root /mnt/data --threshold 20G --depth 4 --top 100`
+
+### 参数
+- `--threshold <SIZE>`：目录阈值，默认 `5G`（如 `500M`、`20G`）
+- `--depth <N>`：扫描深度，默认 `3`
+- `--top <N>`：最多输出条数，默认 `100`
+- `--scan-root <PATH>`：扫描根目录，可重复；默认 `/ /mnt/data`
+- `-h, --help`：查看帮助
+
+### 常见问题
+- 现象：执行后看起来“没有输出”。
+- 排查：
+	- 先用更小范围验证：`sudo bash ./02-Storage/search_size.sh --scan-root /home --depth 2 --threshold 1G --top 20`
+	- 若目录都小于阈值，脚本会输出 `未找到超过阈值的大目录。`
+	- 建议优先指定 `--scan-root`，避免全盘扫描耗时较长时误以为卡住。

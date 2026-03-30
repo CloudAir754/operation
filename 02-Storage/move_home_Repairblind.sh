@@ -47,6 +47,9 @@ fi
 # 主动停止用户进程，防止后续操作被占用
 pkill -u -9 "$USERNAME" 2>/dev/null || true
 
+# 等待旧进程结束
+sleep 2
+
 # 2. 进程占用检查 (防止 usermod 失败)
 if pgrep -u "$USERNAME" > /dev/null; then
     echo "⚠️ 警告: 用户 $USERNAME 当前有进程正在运行！"

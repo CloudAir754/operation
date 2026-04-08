@@ -59,3 +59,21 @@
 	- 先用更小范围验证：`sudo bash ./02-Storage/search_size.sh --scan-root /home --depth 2 --threshold 1G --top 20`
 	- 若目录都小于阈值，脚本会输出 `未找到超过阈值的大目录。`
 	- 建议优先指定 `--scan-root`，避免全盘扫描耗时较长时误以为卡住。
+
+## 2.7 迁移 Docker 数据目录到 /mnt/data/docker（Bind Mount）
+- 脚本：`02-Storage/move_docker_to_mnt.sh`
+- 默认迁移：`/var/lib/docker -> /mnt/data/docker`
+- 特性：自动检查空间、停止/恢复 Docker 服务、`rsync` 迁移、生成备份、写入 `/etc/fstab` 持久化挂载。
+
+### 用法
+- 先检查 Docker 数据量：`sudo du -sh /var/lib/docker`
+- 执行迁移：`sudo bash ./02-Storage/move_docker_to_mnt.sh`
+
+### 迁移后检查
+- 检查挂载是否生效：`mount | grep '/var/lib/docker'`
+- 检查服务状态：`sudo systemctl status docker --no-pager`
+- 检查容器列表：`docker ps -a`
+
+### 备注
+- 脚本会将原目录备份为：`/var/lib/docker.bak.时间戳`
+- 确认业务运行正常后，再手动删除备份目录。

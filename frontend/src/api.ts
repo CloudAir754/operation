@@ -1,4 +1,9 @@
-import type { GpuSnapshot, HomeScanTask, Overview, ResourceSnapshot, StorageSnapshot, UserAccount } from './types'
+import type { GpuSnapshot, HomeScanTask, Overview, PasswordPolicySummary, PasswordPolicyValues, ResourceSnapshot, StorageSnapshot, UserAccount, UserImportPreview } from './types'
+
+async function errorDetail(response: Response, fallback: string): Promise<string> {
+  const body = await response.json().catch(() => null) as { detail?: string } | null
+  return body?.detail ?? fallback
+}
 
 export function readSessionToken(): string {
   const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ''))
@@ -104,4 +109,51 @@ export async function watchHomeScan(
     }
     if (done) break
   }
+}
+
+export async function previewTextImport(token: string, text: string): Promise<UserImportPreview> {
+  const response = await fetch('/api/v1/user-imports/preview/text', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({ text }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '文本预览失败。'))
+  return response.json() as Promise<UserImportPreview>
+}
+
+export async function previewFileImport(
+  token: string,
+  kind: 'csv' | 'xlsx',
+  file: File,
+): Promise<UserImportPreview> {
+  const form = new FormData()
+  form.append('file', file)
+  const response = await fetch(`/api/v1/user-imports/preview/${kind}`, {
+    method: 'POST',
+    headers: { 'X-LabOps-Token': token },
+    body: form,
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '文件预览失败。'))
+  return response.json() as Promise<UserImportPreview>
+}
+
+export async function loadDefaultPasswordPolicy(token: string): Promise<PasswordPolicySummary> {
+  const response = await fetch('/api/v1/password-policy/default', {
+    headers: { 'X-LabOps-Token': token },
+  })
+  if (!response.ok) throw new Error('读取默认密码规则失败。')
+  return response.json() as Promise<PasswordPolicySummary>
+}
+
+export async function previewPasswordPolicy(
+  token: string,
+  policy: PasswordPolicyValues,
+): Promise<PasswordPolicySummary> {
+  const response = await fetch('/api/v1/password-policy/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify(policy),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '密码规则无效。'))
+  return response.json() as Promise<PasswordPolicySummary>
 }

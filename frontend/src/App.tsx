@@ -8,6 +8,7 @@ import './styles.css'
 
 const { Header, Content } = Layout
 const TreemapView = lazy(() => import('./TreemapView'))
+const UserImportPanel = lazy(() => import('./UserImportPanel'))
 
 function bytes(value: number | null): string {
   if (value === null) return 'N/A'
@@ -254,6 +255,7 @@ export default function App() {
               <Suspense fallback={<Spin tip="正在加载 treemap" />}><TreemapView root={homeScan.result.tree} /></Suspense>
             </>}
           </Card></Col>}
+          <Col span={24}><Suspense fallback={<Spin tip="正在加载账号导入工具" />}><UserImportPanel token={sessionToken.current} /></Suspense></Col>
         </Row>
       </Content>
     </Layout>

@@ -124,3 +124,23 @@ def test_home_scan_api_requires_structured_validated_parameters(
     assert rejected.status_code == 422
     assert events.headers["content-type"].startswith("text/event-stream")
     assert '"state": "completed"' in events.text
+
+
+def test_text_import_and_password_policy_preview(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """预览 API 不执行用户创建，也不返回可用明文密码。"""
+
+    monkeypatch.setattr("lab_ops_panel.api.routes._existing_usernames", lambda: {"existing"})
+    client, headers = _client(tmp_path)
+    with client:
+        imported = client.post(
+            "/api/v1/user-imports/preview/text",
+            headers=headers,
+            json={"text": "alice 张三\nexisting 李四"},
+        )
+        password = client.get("/api/v1/password-policy/default", headers=headers)
+
+    assert imported.status_code == 200
+    assert imported.json()["counts"] == {"will_create": 1, "exists": 1, "invalid": 0}
+    assert password.status_code == 200
+    assert password.json()["masked_example"] == "•" * 20
+    assert "password" not in password.json()

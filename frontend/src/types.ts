@@ -204,3 +204,31 @@ export interface HomeScanTask {
     tree: ScanNode
   }
 }
+
+export interface UserImportPreview {
+  header_detected: boolean
+  counts: { will_create: number, exists: number, invalid: number }
+  rows: Array<{
+    source_row: number
+    username: string
+    display_name: string
+    status: 'will_create' | 'exists' | 'invalid'
+    errors: string[]
+  }>
+}
+
+export interface PasswordPolicyValues {
+  length: number
+  min_uppercase: number
+  min_lowercase: number
+  min_digits: number
+  min_symbols: number
+  symbols: string
+  exclude_ambiguous: boolean
+}
+
+export interface PasswordPolicySummary {
+  masked_example: string
+  estimated_entropy_bits: number
+  policy: PasswordPolicyValues
+}

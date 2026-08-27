@@ -7,7 +7,9 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.116.0",
     "nvidia-ml-py>=13.580.65",
+    "openpyxl>=3.1.5",
     "psutil>=7.0.0",
+    "python-multipart>=0.0.32",
     "sqlalchemy>=2.0.0",
     "uvicorn[standard]>=0.35.0",
 ]

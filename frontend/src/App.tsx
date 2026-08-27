@@ -1,8 +1,8 @@
 import { CloudServerOutlined, DatabaseOutlined, DesktopOutlined } from '@ant-design/icons'
-import { Alert, Button, Card, Col, Descriptions, Input, Layout, Progress, Row, Space, Spin, Table, Tag, Typography } from 'antd'
+import { Alert, Button, Card, Col, Descriptions, Input, Layout, Modal, Progress, Row, Space, Spin, Steps, Table, Tag, Typography } from 'antd'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import { cancelHomeScan, loadGpu, loadOverview, loadResources, loadStorage, loadUsers, readSessionToken, startHomeScan, watchHomeScan } from './api'
-import type { HomeScanTask, MountPoint, Overview, StorageSnapshot, UserAccount } from './types'
+import { cancelHomeScan, changeSudo, importSshKeys, loadGpu, loadOverview, loadPrivilegedCapability, loadResources, loadStorage, loadTask, loadUsers, readSessionToken, startHomeScan, watchHomeScan } from './api'
+import type { HomeScanTask, MountPoint, Overview, PersistentTask, PrivilegedCapability, StorageSnapshot, UserAccount } from './types'
 import { filterUsersByUsername } from './userFilters'
 import './styles.css'
 
@@ -49,6 +49,9 @@ export default function App() {
   const [resourceHistory, setResourceHistory] = useState<Array<{ cpu: number, memory: number }>>([])
   const [homeScan, setHomeScan] = useState<HomeScanTask | null>(null)
   const [homeScanError, setHomeScanError] = useState('')
+  const [privileged, setPrivileged] = useState<PrivilegedCapability | null>(null)
+  const [accessTask, setAccessTask] = useState<PersistentTask | null>(null)
+  const [accessError, setAccessError] = useState('')
   const sessionToken = useRef('')
   const scanController = useRef<AbortController | null>(null)
 
@@ -60,12 +63,13 @@ export default function App() {
       return
     }
     let active = true
-    Promise.all([loadOverview(token), loadUsers(token), loadStorage(token)])
-      .then(([nextOverview, nextUsers, nextStorage]) => {
+    Promise.all([loadOverview(token), loadUsers(token), loadStorage(token), loadPrivilegedCapability(token)])
+      .then(([nextOverview, nextUsers, nextStorage, nextPrivileged]) => {
         if (!active) return
         setOverview(nextOverview)
         setUsers(nextUsers)
         setStorage(nextStorage)
+        setPrivileged(nextPrivileged)
         setResourceUpdatedAt(new Date())
         setResourceHistory([{ cpu: nextOverview.resources.cpu.total_percent, memory: nextOverview.resources.memory.percent }])
       })
@@ -100,6 +104,16 @@ export default function App() {
     }
   }, [])
 
+  useEffect(() => {
+    if (!accessTask || ['succeeded', 'failed', 'cancelled', 'rolled_back'].includes(accessTask.state)) return
+    const timer = window.setInterval(() => {
+      loadTask(sessionToken.current, accessTask.id).then(setAccessTask).catch(reason => {
+        setAccessError(reason instanceof Error ? reason.message : '刷新访问控制任务失败。')
+      })
+    }, 750)
+    return () => window.clearInterval(timer)
+  }, [accessTask])
+
   const scanHome = async (username: string) => {
     setHomeScanError('')
     scanController.current?.abort()
@@ -124,6 +138,35 @@ export default function App() {
     }
   }
 
+  const openSshImport = (username: string) => {
+    let keys = ''
+    Modal.confirm({
+      title: `向 ${username} 导入 SSH 公钥`,
+      content: <Input.TextArea rows={7} placeholder="每行一条 OpenSSH 公钥；不接受私钥或 authorized_keys 选项" onChange={event => { keys = event.target.value }} />,
+      okText: '校验并导入',
+      cancelText: '取消',
+      onOk: async () => {
+        if (!keys.trim()) throw new Error('请粘贴至少一条公钥')
+        setAccessError('')
+        setAccessTask(await importSshKeys(sessionToken.current, username, keys))
+      },
+    })
+  }
+
+  const confirmSudo = (username: string, grant: boolean) => {
+    Modal.confirm({
+      title: grant ? `授予 ${username} sudo 权限？` : `撤销 ${username} 的托管 sudo 规则？`,
+      content: grant ? '将写入独立 sudoers.d 文件，并在写入前后运行 visudo。' : '只会撤销 LabOpsPanel 创建且内容未被手工修改的规则，不会改动 sudo 组或其他规则。',
+      okText: grant ? '确认授权' : '确认撤销',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        setAccessError('')
+        setAccessTask(await changeSudo(sessionToken.current, username, grant))
+      },
+    })
+  }
+
   if (error) return <main className="center"><Alert type="error" showIcon message={error} /></main>
   if (!overview) return <main className="center"><Spin size="large" tip="正在读取本机状态" /></main>
 
@@ -142,9 +185,9 @@ export default function App() {
 
   return (
     <Layout className="page">
-      <Header className="header"><Space><DesktopOutlined /><Typography.Title level={3}>LabOpsPanel</Typography.Title><Tag color="blue">只读原型</Tag></Space></Header>
+      <Header className="header"><Space><DesktopOutlined /><Typography.Title level={3}>LabOpsPanel</Typography.Title><Tag color="blue">阶段 2</Tag></Space></Header>
       <Content className="content">
-        <Alert className="notice" type="info" showIcon message="当前版本仅采集本机只读信息，不执行账号、磁盘或文件写操作。" />
+        <Alert className="notice" type={privileged?.available ? 'warning' : 'info'} showIcon message={privileged?.available ? '账号创建、SSH 公钥和托管 sudo 规则写操作已启用；磁盘与文件写操作仍未开放。' : '当前仅开放只读功能；账号写操作需要管理员另行安装可信特权助手。'} />
         <Row gutter={[16, 16]}>
           <Col xs={24} lg={12}><Card title={<Space><CloudServerOutlined />本机信息</Space>}>
             <Descriptions column={1} size="small" items={[
@@ -227,7 +270,7 @@ export default function App() {
               rowKey="uid"
               dataSource={filteredUsers}
               pagination={{ pageSize: 10 }}
-              scroll={{ x: 900 }}
+              scroll={{ x: 1200 }}
               columns={[
                 { title: '用户名', dataIndex: 'username', key: 'username' },
                 { title: 'UID / GID', key: 'identity', render: (_, row) => `${row.uid} / ${row.gid}` },
@@ -239,8 +282,11 @@ export default function App() {
                 { title: 'home 文件系统', key: 'home_storage', render: (_, row) => row.home_storage ? <Space wrap><Tag>{row.home_storage.filesystem}</Tag><span>{row.home_storage.mountpoint}</span><span>可用 {bytes(row.home_storage.free)}</span>{row.home_storage.read_only && <Tag color="orange">只读</Tag>}</Space> : 'N/A' },
                 { title: 'sudo 来源', key: 'sudo', render: (_, row) => <Space wrap>{row.sudo_sources.length ? row.sudo_sources.map(source => <Tag key={source} color="gold">{source}</Tag>) : '无'}{!row.sudo_sources_complete && <Tag color="orange">读取受限</Tag>}</Space> },
                 { title: '空间扫描', key: 'scan', fixed: 'right', render: (_, row) => <Button size="small" onClick={() => void scanHome(row.username)} disabled={homeScan?.state === 'queued' || homeScan?.state === 'running'}>扫描 home</Button> },
+                { title: '登录与权限', key: 'access', fixed: 'right', render: (_, row) => <Space><Button size="small" disabled={!privileged?.available} onClick={() => openSshImport(row.username)}>导入 SSH 公钥</Button><Button size="small" danger disabled={!privileged?.available} onClick={() => confirmSudo(row.username, true)}>授予 sudo</Button><Button size="small" disabled={!privileged?.available} onClick={() => confirmSudo(row.username, false)}>撤销托管规则</Button></Space> },
               ]}
             />
+            {accessError && <Alert className="notice" type="error" showIcon message={accessError} />}
+            {accessTask && <Card className="notice" size="small" title={`访问控制任务 ${accessTask.id}`} extra={<Tag color={accessTask.state === 'succeeded' ? 'green' : accessTask.state === 'failed' ? 'red' : 'blue'}>{accessTask.state}</Tag>}><Steps size="small" items={accessTask.steps.map(step => ({ title: step.name, status: step.state === 'succeeded' ? 'finish' : step.state === 'failed' ? 'error' : step.state === 'running' ? 'process' : 'wait' }))} />{accessTask.error && <Alert type="error" showIcon message={accessTask.error} />}</Card>}
           </Card></Col>
           {(homeScan || homeScanError) && <Col span={24}><Card title="home 空间扫描" extra={(homeScan?.state === 'queued' || homeScan?.state === 'running') && <Button danger onClick={() => void stopHomeScan()}>取消</Button>}>
             {homeScanError && <Alert type="error" showIcon message={homeScanError} />}

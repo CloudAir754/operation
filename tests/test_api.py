@@ -1,5 +1,7 @@
 """只读 API 与启动令牌测试。"""
 
+import base64
+import struct
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -225,3 +227,44 @@ def test_credentials_download_and_explicit_delete(tmp_path: Path) -> None:
     assert downloaded.headers["cache-control"] == "no-store"
     assert deleted.status_code == 204
     assert missing.status_code == 404
+
+
+def test_ssh_and_sudo_actions_use_revalidated_uid(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """SSH 与 sudo API 只把重新读取到的稳定 UID 交给任务管理器。"""
+
+    monkeypatch.setattr(
+        "lab_ops_panel.api.routes.helper_capability",
+        lambda path: {"available": True, "reason": None, "path": str(path)},
+    )
+    monkeypatch.setattr(
+        "lab_ops_panel.api.routes.local_users",
+        lambda: [{"username": "alice", "uid": 1000, "account_source": "local"}],
+    )
+    key_type = "ssh-ed25519"
+    blob = struct.pack(">I", len(key_type)) + key_type.encode() + b"test-key-material"
+    key = f"{key_type} {base64.b64encode(blob).decode()} test@example"
+    calls = []
+    task = {"id": "task123", "state": "queued", "steps": []}
+    client, headers = _client(tmp_path)
+    with client:
+        manager = client.app.state.account_access
+        manager.start_ssh_import = lambda username, uid, keys, idempotency_key: (
+            calls.append(("ssh", username, uid, keys[0].fingerprint, idempotency_key)) or task
+        )
+        manager.start_sudo_change = lambda username, uid, grant, idempotency_key: (
+            calls.append(("sudo", username, uid, grant, idempotency_key)) or task
+        )
+        ssh = client.post(
+            "/api/v1/users/alice/ssh-keys",
+            headers=headers,
+            json={"keys": key, "idempotency_key": "ssh-import-key-123"},
+        )
+        sudo = client.post(
+            "/api/v1/users/alice/sudo/grant",
+            headers=headers,
+            json={"idempotency_key": "sudo-grant-key-123"},
+        )
+
+    assert ssh.status_code == sudo.status_code == 202
+    assert calls[0][1:3] == ("alice", 1000)
+    assert calls[1][1:4] == ("alice", 1000, True)

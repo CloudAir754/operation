@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from lab_ops_panel.api.routes import router
+from lab_ops_panel.application.account_access import AccountAccessManager
 from lab_ops_panel.application.user_creation import UserCreationManager
 from lab_ops_panel.config import Settings, ensure_unprivileged
 from lab_ops_panel.database import initialize_database
@@ -35,9 +36,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.user_creation = UserCreationManager(
             app.state.tasks, app.state.privileged, active_settings.data_dir
         )
+        app.state.account_access = AccountAccessManager(app.state.tasks, app.state.privileged)
         try:
             yield
         finally:
+            app.state.account_access.close()
             app.state.user_creation.close()
 
     app = FastAPI(title="LabOpsPanel", version="0.1.0", lifespan=lifespan)

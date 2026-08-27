@@ -15,7 +15,7 @@ from lab_ops_panel.application.credentials import (
 )
 from lab_ops_panel.application.user_imports import preview_csv, preview_text, preview_xlsx
 from lab_ops_panel.domain.passwords import DEFAULT_SYMBOLS, PasswordPolicy, password_summary
-from lab_ops_panel.domain.ssh_keys import preview_public_keys
+from lab_ops_panel.domain.ssh_keys import parse_public_key, preview_public_keys
 from lab_ops_panel.domain.user_imports import RawImportRow, validate_import_rows
 from lab_ops_panel.infrastructure.gpu import gpu_snapshot
 from lab_ops_panel.infrastructure.pam import pam_policy_snapshot
@@ -63,6 +63,18 @@ class SshKeyPreviewRequest(BaseModel):
     """SSH 公钥粘贴预览参数。"""
 
     keys: str = Field(max_length=100_000)
+
+
+class AccountActionRequest(BaseModel):
+    """账号访问控制写任务的幂等参数。"""
+
+    idempotency_key: str = Field(min_length=16, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class SshKeyImportRequest(AccountActionRequest):
+    """SSH 公钥实际导入参数。"""
+
+    keys: str = Field(min_length=1, max_length=100_000)
 
 
 class UserCreationRow(BaseModel):
@@ -211,6 +223,82 @@ def ssh_key_preview(request: SshKeyPreviewRequest) -> dict[str, Any]:
     return preview_public_keys(request.keys)
 
 
+def _interactive_local_account(username: str) -> dict[str, Any]:
+    """只允许当前仍可交互登录的本机账号参与写操作。"""
+
+    account = next((user for user in local_users() if user["username"] == username), None)
+    if account is None or account["account_source"] != "local":
+        raise HTTPException(status_code=404, detail="未找到可管理的本机交互式账号")
+    return account
+
+
+def _require_privileged_helper(request: Request) -> None:
+    """统一阻断未安装可信助手时的所有系统写操作。"""
+
+    capability = helper_capability(request.app.state.privileged.helper_path)
+    if not capability["available"]:
+        raise HTTPException(status_code=503, detail=capability["reason"])
+
+
+@router.post("/users/{username}/ssh-keys", status_code=202)
+def import_ssh_keys(
+    username: str, request: SshKeyImportRequest, http_request: Request
+) -> dict[str, Any]:
+    """校验全部公钥后启动原子、去重且幂等的导入任务。"""
+
+    _require_privileged_helper(http_request)
+    account = _interactive_local_account(username)
+    preview = preview_public_keys(request.keys)
+    if preview["counts"]["invalid"] or not preview["rows"]:
+        raise HTTPException(status_code=400, detail="公钥输入为空或包含无效行")
+    keys_by_fingerprint = {}
+    for line in request.keys.splitlines():
+        if line.strip():
+            key = parse_public_key(line)
+            keys_by_fingerprint.setdefault(key.fingerprint, key)
+    try:
+        return http_request.app.state.account_access.start_ssh_import(
+            username,
+            int(account["uid"]),
+            list(keys_by_fingerprint.values()),
+            request.idempotency_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/users/{username}/sudo/grant", status_code=202)
+def grant_sudo(
+    username: str, request: AccountActionRequest, http_request: Request
+) -> dict[str, Any]:
+    """启动独立 sudoers 规则授权任务。"""
+
+    _require_privileged_helper(http_request)
+    account = _interactive_local_account(username)
+    try:
+        return http_request.app.state.account_access.start_sudo_change(
+            username, int(account["uid"]), True, request.idempotency_key
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/users/{username}/sudo/revoke", status_code=202)
+def revoke_sudo(
+    username: str, request: AccountActionRequest, http_request: Request
+) -> dict[str, Any]:
+    """启动仅撤销本程序托管规则的 sudo 任务。"""
+
+    _require_privileged_helper(http_request)
+    account = _interactive_local_account(username)
+    try:
+        return http_request.app.state.account_access.start_sudo_change(
+            username, int(account["uid"]), False, request.idempotency_key
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/privileged-capability")
 def privileged_capability(request: Request) -> dict[str, Any]:
     """报告可信特权助手是否已由管理员安全安装。"""
@@ -222,9 +310,7 @@ def privileged_capability(request: Request) -> dict[str, Any]:
 def create_users(request: UserCreationRequest, http_request: Request) -> dict[str, Any]:
     """重新校验预览结果后，启动幂等的单线程用户创建任务。"""
 
-    capability = helper_capability(http_request.app.state.privileged.helper_path)
-    if not capability["available"]:
-        raise HTTPException(status_code=503, detail=capability["reason"])
+    _require_privileged_helper(http_request)
     raw_rows = [
         RawImportRow(index, row.username, row.display_name)
         for index, row in enumerate(request.rows, 1)

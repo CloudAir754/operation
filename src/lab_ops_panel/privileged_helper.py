@@ -127,6 +127,9 @@ def _dispatch(action: str, payload: dict[str, Any]) -> dict[str, Any]:
     account = _local_account(username)
     if account is None:
         raise ValueError("本机账号不存在")
+    expected_uid = payload.get("expected_uid")
+    if not isinstance(expected_uid, int) or account.pw_uid != expected_uid:
+        raise ValueError("账号 UID 已变化，请重新预检")
     if action == "ssh-import":
         raw_keys = payload.get("keys")
         if not isinstance(raw_keys, list) or not 1 <= len(raw_keys) <= 100:

@@ -216,3 +216,32 @@ export async function deleteCredentials(token: string, taskId: string): Promise<
   })
   if (!response.ok) throw new Error(await errorDetail(response, '删除初始凭据失败。'))
 }
+
+export async function importSshKeys(
+  token: string,
+  username: string,
+  keys: string,
+): Promise<PersistentTask> {
+  const response = await fetch(`/api/v1/users/${encodeURIComponent(username)}/ssh-keys`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({ keys, idempotency_key: crypto.randomUUID() }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, 'SSH 公钥导入失败。'))
+  return response.json() as Promise<PersistentTask>
+}
+
+export async function changeSudo(
+  token: string,
+  username: string,
+  grant: boolean,
+): Promise<PersistentTask> {
+  const action = grant ? 'grant' : 'revoke'
+  const response = await fetch(`/api/v1/users/${encodeURIComponent(username)}/sudo/${action}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({ idempotency_key: crypto.randomUUID() }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, grant ? 'sudo 授权失败。' : 'sudo 撤销失败。'))
+  return response.json() as Promise<PersistentTask>
+}

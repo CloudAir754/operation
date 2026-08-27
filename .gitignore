@@ -10,6 +10,9 @@ __pycache__/
 node_modules/
 dist/
 coverage/
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
 
 # 编辑器与系统文件
 .idea/

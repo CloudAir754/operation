@@ -12,8 +12,11 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from lab_ops_panel.api.routes import router
+from lab_ops_panel.application.user_creation import UserCreationManager
 from lab_ops_panel.config import Settings, ensure_unprivileged
 from lab_ops_panel.database import initialize_database
+from lab_ops_panel.infrastructure.privileged import PrivilegedExecutor
+from lab_ops_panel.infrastructure.tasks import TaskRepository
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -26,7 +29,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.database_path = initialize_database(active_settings.data_dir)
-        yield
+        app.state.tasks = TaskRepository(app.state.database_path)
+        app.state.interrupted_tasks = app.state.tasks.mark_running_interrupted()
+        app.state.privileged = PrivilegedExecutor()
+        app.state.user_creation = UserCreationManager(
+            app.state.tasks, app.state.privileged, active_settings.data_dir
+        )
+        try:
+            yield
+        finally:
+            app.state.user_creation.close()
 
     app = FastAPI(title="LabOpsPanel", version="0.1.0", lifespan=lifespan)
     app.state.settings = active_settings

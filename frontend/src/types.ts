@@ -232,3 +232,49 @@ export interface PasswordPolicySummary {
   estimated_entropy_bits: number
   policy: PasswordPolicyValues
 }
+
+export interface PamPolicySnapshot {
+  common_password: string
+  password_stack: Array<{
+    line: number
+    control: string
+    module: string
+    options: string[]
+  }>
+  pwquality_module_installed: boolean
+  pwquality_enabled: boolean
+  settings: Record<string, number | boolean>
+  config_sources: string[]
+  generation_minimums: {
+    length: number
+    min_digits: number
+    min_uppercase: number
+    min_lowercase: number
+    min_symbols: number
+    min_classes: number
+  }
+  warnings: string[]
+  modification_supported: boolean
+  modification_reason: string | null
+  password_aging_managed: false
+}
+
+export interface PrivilegedCapability {
+  available: boolean
+  reason: string | null
+  path: string
+}
+
+export interface PersistentTask {
+  id: string
+  kind: string
+  state: 'queued' | 'prechecking' | 'waiting_confirmation' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted' | 'rollback_pending' | 'rolled_back'
+  target: string
+  error: string | null
+  steps: Array<{
+    sequence: number
+    name: string
+    state: string
+    detail: Record<string, unknown> | null
+  }>
+}

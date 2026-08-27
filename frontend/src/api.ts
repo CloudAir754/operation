@@ -1,4 +1,4 @@
-import type { GpuSnapshot, HomeScanTask, Overview, PasswordPolicySummary, PasswordPolicyValues, ResourceSnapshot, StorageSnapshot, UserAccount, UserImportPreview } from './types'
+import type { GpuSnapshot, HomeScanTask, Overview, PamPolicySnapshot, PasswordPolicySummary, PasswordPolicyValues, PersistentTask, PrivilegedCapability, ResourceSnapshot, StorageSnapshot, UserAccount, UserImportPreview } from './types'
 
 async function errorDetail(response: Response, fallback: string): Promise<string> {
   const body = await response.json().catch(() => null) as { detail?: string } | null
@@ -156,4 +156,63 @@ export async function previewPasswordPolicy(
   })
   if (!response.ok) throw new Error(await errorDetail(response, '密码规则无效。'))
   return response.json() as Promise<PasswordPolicySummary>
+}
+
+export async function loadPamPolicy(token: string): Promise<PamPolicySnapshot> {
+  const response = await fetch('/api/v1/pam-policy', {
+    headers: { 'X-LabOps-Token': token },
+  })
+  if (!response.ok) throw new Error('读取 PAM 策略失败。')
+  return response.json() as Promise<PamPolicySnapshot>
+}
+
+export async function loadPrivilegedCapability(token: string): Promise<PrivilegedCapability> {
+  const response = await fetch('/api/v1/privileged-capability', {
+    headers: { 'X-LabOps-Token': token },
+  })
+  if (!response.ok) throw new Error('读取特权助手能力失败。')
+  return response.json() as Promise<PrivilegedCapability>
+}
+
+export async function createUsers(
+  token: string,
+  rows: Array<{ username: string, display_name: string }>,
+  policy: PasswordPolicyValues,
+): Promise<PersistentTask> {
+  const response = await fetch('/api/v1/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({ rows, ...policy, idempotency_key: crypto.randomUUID() }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '创建用户任务启动失败。'))
+  return response.json() as Promise<PersistentTask>
+}
+
+export async function loadTask(token: string, taskId: string): Promise<PersistentTask> {
+  const response = await fetch(`/api/v1/tasks/${taskId}`, {
+    headers: { 'X-LabOps-Token': token },
+  })
+  if (!response.ok) throw new Error('读取任务状态失败。')
+  return response.json() as Promise<PersistentTask>
+}
+
+export async function downloadCredentials(token: string, taskId: string): Promise<void> {
+  const response = await fetch(`/api/v1/tasks/${taskId}/credentials`, {
+    headers: { 'X-LabOps-Token': token },
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '下载初始凭据失败。'))
+  const url = URL.createObjectURL(await response.blob())
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `initial-credentials-${taskId}.csv`
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+export async function deleteCredentials(token: string, taskId: string): Promise<void> {
+  const response = await fetch(`/api/v1/tasks/${taskId}/credentials`, {
+    method: 'DELETE',
+    headers: { 'X-LabOps-Token': token },
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '删除初始凭据失败。'))
 }

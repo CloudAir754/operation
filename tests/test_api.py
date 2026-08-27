@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from lab_ops_panel.app import create_app
+from lab_ops_panel.application.credentials import export_initial_credentials
 from lab_ops_panel.config import Settings
 
 
@@ -144,3 +145,83 @@ def test_text_import_and_password_policy_preview(tmp_path: Path, monkeypatch) ->
     assert password.status_code == 200
     assert password.json()["masked_example"] == "•" * 20
     assert "password" not in password.json()
+
+
+def test_persistent_tasks_are_visible_through_api(tmp_path: Path) -> None:
+    """任务页读取持久化 Task/TaskStep，而不是仅依赖内存状态。"""
+
+    client, headers = _client(tmp_path)
+    with client:
+        task = client.app.state.tasks.create_or_get(
+            "test", "idempotency-key-123", {"username": "alice"}, "alice", ["预检"]
+        )
+        listed = client.get("/api/v1/tasks", headers=headers)
+        detail = client.get(f"/api/v1/tasks/{task['id']}", headers=headers)
+
+    assert listed.status_code == 200
+    assert listed.json()[0]["id"] == task["id"]
+    assert detail.json()["steps"][0]["name"] == "预检"
+
+
+def test_user_creation_requires_trusted_helper(tmp_path: Path) -> None:
+    """未安装 root 所有的可信助手时，实际写操作保持关闭。"""
+
+    client, headers = _client(tmp_path)
+    with client:
+        response = client.post(
+            "/api/v1/users",
+            headers=headers,
+            json={
+                "rows": [{"username": "newaccount", "display_name": "张三"}],
+                "idempotency_key": "create-users-key-123",
+            },
+        )
+
+    assert response.status_code == 503
+    assert "特权助手" in response.json()["detail"]
+
+
+def test_user_creation_revalidates_before_starting(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """提交创建时必须再次以操作系统账号事实拒绝重名。"""
+
+    monkeypatch.setattr(
+        "lab_ops_panel.api.routes.helper_capability",
+        lambda path: {"available": True, "reason": None, "path": str(path)},
+    )
+    monkeypatch.setattr("lab_ops_panel.api.routes._existing_usernames", lambda: {"existing"})
+    client, headers = _client(tmp_path)
+    with client:
+        response = client.post(
+            "/api/v1/users",
+            headers=headers,
+            json={
+                "rows": [{"username": "existing", "display_name": "张三"}],
+                "idempotency_key": "create-users-key-123",
+            },
+        )
+
+    assert response.status_code == 409
+
+
+def test_credentials_download_and_explicit_delete(tmp_path: Path) -> None:
+    """一次性凭据只能经关联任务下载，并由管理员显式删除。"""
+
+    client, headers = _client(tmp_path)
+    with client:
+        task = client.app.state.tasks.create_or_get(
+            "create_users",
+            "create-users-key-123",
+            {"rows": [{"username": "alice", "display_name": "张三"}]},
+            "批量用户:1",
+            ["导出"],
+        )
+        export_initial_credentials(tmp_path, task["id"], [("alice", "张三", "temporary-password")])
+        downloaded = client.get(f"/api/v1/tasks/{task['id']}/credentials", headers=headers)
+        deleted = client.delete(f"/api/v1/tasks/{task['id']}/credentials", headers=headers)
+        missing = client.get(f"/api/v1/tasks/{task['id']}/credentials", headers=headers)
+
+    assert downloaded.status_code == 200
+    assert "temporary-password" in downloaded.text
+    assert downloaded.headers["cache-control"] == "no-store"
+    assert deleted.status_code == 204
+    assert missing.status_code == 404

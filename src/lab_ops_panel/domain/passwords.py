@@ -43,6 +43,8 @@ class PasswordPolicy:
             raise ValueError("要求符号时允许的符号集合不能为空")
         if any(character.isspace() or not character.isprintable() for character in self.symbols):
             raise ValueError("符号集合只能包含可打印的非空白字符")
+        if ":" in self.symbols:
+            raise ValueError("符号集合不能包含冒号，以免破坏系统密码输入协议")
         if len(set(self.symbols)) != len(self.symbols):
             raise ValueError("符号集合不能包含重复字符")
 

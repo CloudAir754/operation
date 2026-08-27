@@ -39,6 +39,7 @@ def system_snapshot() -> dict[str, Any]:
     required_commands = (
         "chage",
         "findmnt",
+        "getfacl",
         "getent",
         "lsblk",
         "passwd",

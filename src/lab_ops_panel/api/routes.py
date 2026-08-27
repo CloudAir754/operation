@@ -5,13 +5,21 @@ import json
 from collections.abc import AsyncIterator
 from typing import Annotated, Any
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel, Field, field_validator
 
+from lab_ops_panel.application.credentials import (
+    delete_initial_credentials,
+    initial_credentials_path,
+)
 from lab_ops_panel.application.user_imports import preview_csv, preview_text, preview_xlsx
 from lab_ops_panel.domain.passwords import DEFAULT_SYMBOLS, PasswordPolicy, password_summary
+from lab_ops_panel.domain.ssh_keys import preview_public_keys
+from lab_ops_panel.domain.user_imports import RawImportRow, validate_import_rows
 from lab_ops_panel.infrastructure.gpu import gpu_snapshot
+from lab_ops_panel.infrastructure.pam import pam_policy_snapshot
+from lab_ops_panel.infrastructure.privileged import helper_capability
 from lab_ops_panel.infrastructure.resources import resource_snapshot
 from lab_ops_panel.infrastructure.scans import TERMINAL_STATES, home_scan_manager
 from lab_ops_panel.infrastructure.storage import block_device_snapshot
@@ -49,6 +57,35 @@ class PasswordPolicyRequest(BaseModel):
     min_symbols: int = 1
     symbols: str = Field(default=DEFAULT_SYMBOLS, max_length=100)
     exclude_ambiguous: bool = True
+
+
+class SshKeyPreviewRequest(BaseModel):
+    """SSH 公钥粘贴预览参数。"""
+
+    keys: str = Field(max_length=100_000)
+
+
+class UserCreationRow(BaseModel):
+    """实际创建任务只接受预览阶段定义的两项账号字段。"""
+
+    username: str = Field(min_length=1, max_length=32)
+    display_name: str = Field(min_length=1, max_length=100)
+
+    @field_validator("display_name")
+    @classmethod
+    def reject_display_name_whitespace(cls, value: str) -> str:
+        """保持与批量导入领域规则一致，拒绝姓名中的空白字符。"""
+
+        if any(character.isspace() for character in value):
+            raise ValueError("中文姓名不能包含空白字符")
+        return value
+
+
+class UserCreationRequest(PasswordPolicyRequest):
+    """启动幂等批量用户创建任务的完整结构化参数。"""
+
+    rows: list[UserCreationRow] = Field(min_length=1, max_length=500)
+    idempotency_key: str = Field(min_length=16, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
 
 
 @router.get("/health")
@@ -158,6 +195,118 @@ def preview_password_policy(request: PasswordPolicyRequest) -> dict[str, Any]:
         return password_summary(PasswordPolicy(**request.model_dump()))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/pam-policy")
+def actual_pam_policy() -> dict[str, Any]:
+    """返回当前实际可见的 PAM 密码堆栈和 pwquality 能力。"""
+
+    return pam_policy_snapshot()
+
+
+@router.post("/ssh-keys/preview")
+def ssh_key_preview(request: SshKeyPreviewRequest) -> dict[str, Any]:
+    """校验公钥类型与指纹，不回传完整密钥内容。"""
+
+    return preview_public_keys(request.keys)
+
+
+@router.get("/privileged-capability")
+def privileged_capability(request: Request) -> dict[str, Any]:
+    """报告可信特权助手是否已由管理员安全安装。"""
+
+    return helper_capability(request.app.state.privileged.helper_path)
+
+
+@router.post("/users", status_code=202)
+def create_users(request: UserCreationRequest, http_request: Request) -> dict[str, Any]:
+    """重新校验预览结果后，启动幂等的单线程用户创建任务。"""
+
+    capability = helper_capability(http_request.app.state.privileged.helper_path)
+    if not capability["available"]:
+        raise HTTPException(status_code=503, detail=capability["reason"])
+    raw_rows = [
+        RawImportRow(index, row.username, row.display_name)
+        for index, row in enumerate(request.rows, 1)
+    ]
+    validated = validate_import_rows(raw_rows, _existing_usernames())
+    rejected = [row for row in validated if row.status != "will_create"]
+    if rejected:
+        raise HTTPException(
+            status_code=409,
+            detail="账号事实状态已变化或提交内容无效，请重新预览后再创建",
+        )
+    policy_fields = PasswordPolicyRequest.model_fields
+    policy_values = {name: getattr(request, name) for name in policy_fields}
+    try:
+        policy = PasswordPolicy(**policy_values)
+        policy.validate()
+        return http_request.app.state.user_creation.start(
+            [row.model_dump() for row in request.rows],
+            policy,
+            request.idempotency_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _credential_task(task_id: str, request: Request) -> dict[str, Any]:
+    """确认凭据访问关联的是实际用户创建任务。"""
+
+    try:
+        task = request.app.state.tasks.get(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="任务不存在") from exc
+    if task["kind"] != "create_users":
+        raise HTTPException(status_code=404, detail="该任务没有初始凭据")
+    return task
+
+
+@router.get("/tasks/{task_id}/credentials")
+def download_credentials(task_id: str, request: Request) -> FileResponse:
+    """下载仅启动用户可读的一次性初始凭据 CSV。"""
+
+    _credential_task(task_id, request)
+    try:
+        path = initial_credentials_path(request.app.state.settings.data_dir, task_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return FileResponse(
+        path,
+        media_type="text/csv; charset=utf-8",
+        filename=path.name,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.delete("/tasks/{task_id}/credentials", status_code=204)
+def delete_credentials(task_id: str, request: Request) -> Response:
+    """由管理员明确删除一次性初始凭据文件。"""
+
+    _credential_task(task_id, request)
+    try:
+        delete_initial_credentials(request.app.state.settings.data_dir, task_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    request.app.state.tasks.log("删除初始凭据", task_id, "succeeded", task_id)
+    return Response(status_code=204)
+
+
+@router.get("/tasks")
+def recent_tasks(request: Request) -> list[dict[str, Any]]:
+    """返回当前数据库中最近的持久化任务。"""
+
+    return request.app.state.tasks.list_recent()
+
+
+@router.get("/tasks/{task_id}")
+def task_detail(task_id: str, request: Request) -> dict[str, Any]:
+    """返回单个持久化任务及步骤。"""
+
+    try:
+        return request.app.state.tasks.get(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="任务不存在") from exc
 
 
 @router.post("/home-scans", status_code=202)

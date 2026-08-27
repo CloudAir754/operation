@@ -1,0 +1,164 @@
+"""经 sudo 调用的结构化白名单特权助手入口。"""
+
+from __future__ import annotations
+
+import json
+import os
+import pwd
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+from lab_ops_panel.domain.ssh_keys import parse_public_key
+from lab_ops_panel.domain.user_imports import USERNAME
+from lab_ops_panel.infrastructure.authorized_keys import import_authorized_keys
+from lab_ops_panel.infrastructure.sudo_rules import apply_sudo_grant, revoke_sudo_grant
+
+SYSTEM_COMMANDS = {
+    "useradd": Path("/usr/sbin/useradd"),
+    "userdel": Path("/usr/sbin/userdel"),
+    "chpasswd": Path("/usr/sbin/chpasswd"),
+}
+
+
+def _local_account(username: str, path: Path = Path("/etc/passwd")) -> pwd.struct_passwd | None:
+    """只从本机 passwd 文件返回账号，不接受目录账号。"""
+
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise ValueError("无法读取本机账号来源") from exc
+    for line in lines:
+        fields = line.split(":")
+        if len(fields) != 7 or fields[0] != username:
+            continue
+        try:
+            return pwd.struct_passwd(
+                (
+                    fields[0],
+                    fields[1],
+                    int(fields[2]),
+                    int(fields[3]),
+                    fields[4],
+                    fields[5],
+                    fields[6],
+                )
+            )
+        except ValueError as exc:
+            raise ValueError("本机账号记录无效") from exc
+    return None
+
+
+def _run(command: list[str], input_value: str | None = None) -> None:
+    """执行固定参数系统命令，不将 stdin 或 stderr 传播到结果。"""
+
+    try:
+        subprocess.run(
+            command,
+            input=input_value,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=60,
+            env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8"},
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        raise RuntimeError(f"系统动作 {Path(command[0]).name} 失败") from exc
+
+
+def _create_user(payload: dict[str, Any]) -> dict[str, Any]:
+    """创建单个本机账号、设置随机密码并验证事实状态。"""
+
+    username = str(payload.get("username", ""))
+    display_name = str(payload.get("display_name", ""))
+    password = str(payload.get("password", ""))
+    shell = str(payload.get("shell", "/bin/bash"))
+    if not USERNAME.fullmatch(username):
+        raise ValueError("用户名格式无效")
+    invalid_display_name = any(value in display_name for value in ":\r\n\x00")
+    if not display_name or len(display_name) > 100 or invalid_display_name:
+        raise ValueError("中文姓名无效")
+    if len(password) < 15 or any(value in password for value in ":\r\n\x00"):
+        raise ValueError("初始密码不满足安全输入要求")
+    if shell != "/bin/bash":
+        raise ValueError("首版只允许 /bin/bash")
+    if _local_account(username) is not None:
+        return {"created": False, "reason": "账号已存在"}
+    _run(
+        [
+            str(SYSTEM_COMMANDS["useradd"]),
+            "--create-home",
+            "--shell",
+            shell,
+            "--comment",
+            display_name,
+            "--",
+            username,
+        ]
+    )
+    try:
+        account = _local_account(username)
+        if account is None:
+            raise RuntimeError("useradd 后未找到本机账号")
+        _run([str(SYSTEM_COMMANDS["chpasswd"])], f"{username}:{password}\n")
+        home = Path(account.pw_dir)
+        if not home.is_dir() or home.stat().st_uid != account.pw_uid:
+            raise RuntimeError("账号 home 创建结果验证失败")
+        return {
+            "created": True,
+            "username": account.pw_name,
+            "uid": account.pw_uid,
+            "gid": account.pw_gid,
+            "home": account.pw_dir,
+            "shell": account.pw_shell,
+        }
+    except Exception:
+        _run([str(SYSTEM_COMMANDS["userdel"]), "--remove", "--", username])
+        raise
+
+
+def _dispatch(action: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """将固定动作名映射到严格参数实现。"""
+
+    if action == "create-user":
+        return _create_user(payload)
+    username = str(payload.get("username", ""))
+    account = _local_account(username)
+    if account is None:
+        raise ValueError("本机账号不存在")
+    if action == "ssh-import":
+        raw_keys = payload.get("keys")
+        if not isinstance(raw_keys, list) or not 1 <= len(raw_keys) <= 100:
+            raise ValueError("公钥列表无效")
+        keys = [parse_public_key(str(value)) for value in raw_keys]
+        return import_authorized_keys(Path(account.pw_dir), account.pw_uid, account.pw_gid, keys)
+    if action == "sudo-grant":
+        return apply_sudo_grant(username, account.pw_uid)
+    if action == "sudo-revoke":
+        return revoke_sudo_grant(username, account.pw_uid)
+    raise ValueError("不支持的特权动作")
+
+
+def main() -> None:
+    """读取最大 1 MiB JSON 请求并只输出结构化结果。"""
+
+    if os.geteuid() != 0:
+        print(json.dumps({"ok": False, "error": "特权助手必须以 root 运行"}))
+        raise SystemExit(1)
+    if len(sys.argv) != 2:
+        print(json.dumps({"ok": False, "error": "动作参数无效"}))
+        raise SystemExit(2)
+    value = sys.stdin.buffer.read(1_000_001)
+    if len(value) > 1_000_000:
+        print(json.dumps({"ok": False, "error": "请求过大"}))
+        raise SystemExit(2)
+    try:
+        payload = json.loads(value)
+        if not isinstance(payload, dict):
+            raise ValueError("请求必须是对象")
+        result = _dispatch(sys.argv[1], payload)
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+        raise SystemExit(1) from None
+    print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))

@@ -5,6 +5,7 @@ description = "仅管理当前 Ubuntu 主机的本地运维面板"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "alembic>=1.19.1",
     "fastapi>=0.116.0",
     "nvidia-ml-py>=13.580.65",
     "openpyxl>=3.1.5",
@@ -24,6 +25,7 @@ dev = [
 
 [project.scripts]
 labopspanel = "lab_ops_panel.cli:main"
+labopspanel-privileged = "lab_ops_panel.privileged_helper:main"
 
 [build-system]
 requires = ["hatchling"]

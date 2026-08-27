@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import os
 import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1"})
+
+
+def ensure_unprivileged(effective_uid: int | None = None) -> None:
+    """拒绝以 root 运行整个 Web 服务。"""
+
+    uid = os.geteuid() if effective_uid is None else effective_uid
+    if uid == 0:
+        raise PermissionError("LabOpsPanel 不允许以 root 身份运行整个 Web 服务")
 
 
 def default_data_dir() -> Path:

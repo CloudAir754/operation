@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from lab_ops_panel.infrastructure.system_info import local_users
+from lab_ops_panel.infrastructure.system_info import _directory_account_sources, local_users
 
 
 def test_local_users_omit_nologin_shell(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -32,3 +32,12 @@ def test_local_users_ignore_malformed_record(tmp_path: Path, monkeypatch) -> Non
     monkeypatch.setattr("lab_ops_panel.infrastructure.system_info._sudo_group_members", set)
 
     assert [user["username"] for user in local_users(passwd_path)] == ["valid"]
+
+
+def test_directory_account_sources_exclude_local_backends(tmp_path: Path) -> None:
+    """NSS 检测只报告可能引入目录账号的来源。"""
+
+    nsswitch = tmp_path / "nsswitch.conf"
+    nsswitch.write_text("passwd: files systemd sss\ngroup: files systemd sss\n", encoding="utf-8")
+
+    assert _directory_account_sources(nsswitch) == ["sss"]

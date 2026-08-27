@@ -6,11 +6,14 @@ import grp
 import os
 import platform
 import pwd
+import shutil
 import socket
 from pathlib import Path
 from typing import Any
 
 import psutil
+
+from lab_ops_panel.infrastructure.sudoers import scan_sudoers_rules
 
 
 def _read_os_release(path: Path = Path("/etc/os-release")) -> dict[str, str]:
@@ -33,6 +36,19 @@ def system_snapshot() -> dict[str, Any]:
     """采集不会触发外部网络访问的本机基本信息。"""
 
     os_release = _read_os_release()
+    required_commands = (
+        "chage",
+        "findmnt",
+        "getent",
+        "lsblk",
+        "passwd",
+        "rsync",
+        "ssh-keygen",
+        "sudo",
+        "useradd",
+        "userdel",
+        "visudo",
+    )
     addresses = sorted(
         {
             address.address
@@ -52,33 +68,28 @@ def system_snapshot() -> dict[str, Any]:
             "proc": Path("/proc").is_dir(),
             "sys": Path("/sys").is_dir(),
             "systemd": Path("/run/systemd/system").is_dir(),
+            "commands": {
+                command: shutil.which(command) is not None for command in required_commands
+            },
+            "directory_account_sources": _directory_account_sources(),
         },
     }
 
 
-def resource_snapshot() -> dict[str, Any]:
-    """读取 CPU 和内存当前值，不在数据库中持久化高频样本。"""
+def _directory_account_sources(path: Path = Path("/etc/nsswitch.conf")) -> list[str]:
+    """从 passwd 的 NSS 配置识别 LDAP、NIS、SSSD 等目录来源。"""
 
-    memory = psutil.virtual_memory()
-    swap = psutil.swap_memory()
-    return {
-        "cpu": {
-            "logical_cores": psutil.cpu_count(logical=True),
-            "physical_cores": psutil.cpu_count(logical=False),
-            "load_average": list(os.getloadavg()),
-            "total_percent": psutil.cpu_percent(interval=None),
-            "per_core_percent": psutil.cpu_percent(interval=None, percpu=True),
-        },
-        "memory": {
-            "total": memory.total,
-            "available": memory.available,
-            "used": memory.used,
-            "cached": getattr(memory, "cached", None),
-            "percent": memory.percent,
-            "swap_total": swap.total,
-            "swap_used": swap.used,
-        },
-    }
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    for raw_line in lines:
+        line = raw_line.split("#", 1)[0].strip()
+        if not line.startswith("passwd:"):
+            continue
+        sources = [value for value in line.split(":", 1)[1].split() if not value.startswith("[")]
+        return [value for value in sources if value not in {"files", "systemd"}]
+    return []
 
 
 def mount_points() -> list[dict[str, Any]]:
@@ -88,8 +99,10 @@ def mount_points() -> list[dict[str, Any]]:
     for item in psutil.disk_partitions(all=False):
         try:
             usage = psutil.disk_usage(item.mountpoint)
+            filesystem_stats = os.statvfs(item.mountpoint)
         except OSError:
             usage = None
+            filesystem_stats = None
         result.append(
             {
                 "device": item.device,
@@ -100,6 +113,8 @@ def mount_points() -> list[dict[str, Any]]:
                 "used": usage.used if usage else None,
                 "free": usage.free if usage else None,
                 "percent": usage.percent if usage else None,
+                "inodes_total": filesystem_stats.f_files if filesystem_stats else None,
+                "inodes_free": filesystem_stats.f_ffree if filesystem_stats else None,
                 "read_only": "ro" in item.opts.split(","),
             }
         )
@@ -116,6 +131,32 @@ def _sudo_group_members() -> set[str]:
     members = set(sudo_group.gr_mem)
     members.update(entry.pw_name for entry in pwd.getpwall() if entry.pw_gid == sudo_group.gr_gid)
     return members
+
+
+def _home_storage(path: Path) -> dict[str, Any] | None:
+    """按最长挂载点匹配 home 的当前文件系统关系。"""
+
+    resolved = path.resolve(strict=False)
+    matches = []
+    for mount in psutil.disk_partitions(all=True):
+        mountpoint = Path(mount.mountpoint).resolve(strict=False)
+        if resolved == mountpoint or resolved.is_relative_to(mountpoint):
+            matches.append((len(mountpoint.parts), mount, mountpoint))
+    if not matches:
+        return None
+    _, mount, mountpoint = max(matches, key=lambda item: item[0])
+    try:
+        usage = psutil.disk_usage(str(mountpoint))
+    except OSError:
+        usage = None
+    return {
+        "device": mount.device,
+        "filesystem": mount.fstype,
+        "mountpoint": str(mountpoint),
+        "total": usage.total if usage else None,
+        "free": usage.free if usage else None,
+        "read_only": "ro" in mount.opts.split(","),
+    }
 
 
 def local_users(passwd_path: Path = Path("/etc/passwd")) -> list[dict[str, Any]]:
@@ -147,7 +188,17 @@ def local_users(passwd_path: Path = Path("/etc/passwd")) -> list[dict[str, Any]]
                 "home": home,
                 "resolved_home": str(Path(home).resolve(strict=False)),
                 "shell": shell,
-                "sudo_sources": ["sudo 组"] if username in sudo_members else [],
+                "account_source": "local",
+                "account_status": "N/A",
+                "home_storage": _home_storage(Path(home)),
+                "sudo_sources": [],
             }
         )
+    sudoers_scan = scan_sudoers_rules({str(user["username"]) for user in users})
+    for user in users:
+        username = str(user["username"])
+        sources = ["sudo 组"] if username in sudo_members else []
+        sources.extend(sudoers_scan["sources"].get(username, []))
+        user["sudo_sources"] = sources
+        user["sudo_sources_complete"] = sudoers_scan["complete"]
     return sorted(users, key=lambda item: (item["uid"], item["username"]))

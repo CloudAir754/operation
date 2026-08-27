@@ -70,3 +70,57 @@ def test_users_have_stable_numeric_identity(tmp_path: Path) -> None:
     assert all(
         isinstance(item["uid"], int) and isinstance(item["gid"], int) for item in response.json()
     )
+
+
+def test_home_scan_api_requires_structured_validated_parameters(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    """扫描 API 只接受受限用户名、幂等键和范围参数。"""
+
+    task = {
+        "id": "task-id",
+        "username": "alice",
+        "root": "/home/alice",
+        "max_depth": 5,
+        "max_nodes": 100,
+        "state": "completed",
+        "nodes_scanned": 1,
+        "started_at": None,
+        "finished_at": None,
+        "error": None,
+        "result": None,
+    }
+
+    class FakeManager:
+        def start(self, username, idempotency_key, max_depth, max_nodes):  # type: ignore[no-untyped-def]
+            assert username == "alice"
+            assert idempotency_key == "idempotency-key-123"
+            return task
+
+        def get(self, task_id):  # type: ignore[no-untyped-def]
+            return task
+
+    monkeypatch.setattr("lab_ops_panel.api.routes.home_scan_manager", FakeManager())
+    client, headers = _client(tmp_path)
+    with client:
+        accepted = client.post(
+            "/api/v1/home-scans",
+            headers=headers,
+            json={
+                "username": "alice",
+                "idempotency_key": "idempotency-key-123",
+                "max_depth": 5,
+                "max_nodes": 100,
+            },
+        )
+        rejected = client.post(
+            "/api/v1/home-scans",
+            headers=headers,
+            json={"username": "../../etc", "idempotency_key": "idempotency-key-456"},
+        )
+        events = client.get("/api/v1/home-scans/task-id/events", headers=headers)
+
+    assert accepted.status_code == 202
+    assert rejected.status_code == 422
+    assert events.headers["content-type"].startswith("text/event-stream")
+    assert '"state": "completed"' in events.text

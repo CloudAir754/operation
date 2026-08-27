@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from lab_ops_panel.config import Settings
+from lab_ops_panel.config import Settings, ensure_unprivileged
 
 
 def test_default_host_is_loopback(tmp_path: Path) -> None:
@@ -30,3 +30,16 @@ def test_invalid_port_is_rejected(port: int, tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="端口"):
         Settings(port=port, data_dir=tmp_path).validate()
+
+
+def test_root_process_is_rejected() -> None:
+    """整个 Web 服务不能以 root 身份运行。"""
+
+    with pytest.raises(PermissionError, match="root"):
+        ensure_unprivileged(0)
+
+
+def test_regular_user_process_is_accepted() -> None:
+    """普通 UID 满足最小权限运行前提。"""
+
+    ensure_unprivileged(1000)

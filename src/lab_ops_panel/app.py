@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from lab_ops_panel.api.routes import router
-from lab_ops_panel.config import Settings
+from lab_ops_panel.config import Settings, ensure_unprivileged
 from lab_ops_panel.database import initialize_database
 
 
@@ -21,6 +21,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     active_settings = settings or Settings()
     active_settings.validate()
+    ensure_unprivileged()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:

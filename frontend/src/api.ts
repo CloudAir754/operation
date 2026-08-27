@@ -1,4 +1,4 @@
-import type { Overview, UserAccount } from './types'
+import type { Overview, ResourceSnapshot, UserAccount } from './types'
 
 export function readSessionToken(): string {
   const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ''))
@@ -26,4 +26,12 @@ export async function loadUsers(token: string): Promise<UserAccount[]> {
   })
   if (!response.ok) throw new Error('读取本机账号失败。')
   return response.json() as Promise<UserAccount[]>
+}
+
+export async function loadResources(token: string): Promise<ResourceSnapshot> {
+  const response = await fetch('/api/v1/resources', {
+    headers: { 'X-LabOps-Token': token },
+  })
+  if (!response.ok) throw new Error('刷新 CPU 和内存状态失败。')
+  return response.json() as Promise<ResourceSnapshot>
 }

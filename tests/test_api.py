@@ -48,6 +48,17 @@ def test_overview_degrades_without_gpu(tmp_path: Path, monkeypatch) -> None:  # 
     assert body["resources"]["memory"]["total"] > 0
 
 
+def test_resources_returns_refreshable_snapshot(tmp_path: Path) -> None:
+    """独立资源接口为前端短周期刷新提供 CPU 和内存快照。"""
+
+    client, headers = _client(tmp_path)
+    with client:
+        response = client.get("/api/v1/resources", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["cpu"]["logical_cores"] > 0
+    assert response.json()["memory"]["total"] > 0
+
+
 def test_users_have_stable_numeric_identity(tmp_path: Path) -> None:
     """账号响应包含 UID/GID，不能只依赖可变用户名。"""
 

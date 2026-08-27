@@ -3,6 +3,7 @@ export interface SystemSnapshot {
   operating_system: string
   kernel: string
   architecture: string
+  supported_architecture: boolean
   addresses: string[]
   capabilities: Record<string, boolean>
 }

@@ -46,6 +46,7 @@ def system_snapshot() -> dict[str, Any]:
         "operating_system": os_release.get("PRETTY_NAME", platform.platform()),
         "kernel": platform.release(),
         "architecture": platform.machine(),
+        "supported_architecture": platform.machine().lower() in {"amd64", "x86_64"},
         "addresses": addresses,
         "capabilities": {
             "proc": Path("/proc").is_dir(),
@@ -117,13 +118,13 @@ def _sudo_group_members() -> set[str]:
     return members
 
 
-def local_users() -> list[dict[str, Any]]:
+def local_users(passwd_path: Path = Path("/etc/passwd")) -> list[dict[str, Any]]:
     """从本机 passwd 文件读取账号并基于 UID/GID 返回稳定关联信息。"""
 
     sudo_members = _sudo_group_members()
     users = []
     try:
-        passwd_lines = Path("/etc/passwd").read_text(encoding="utf-8").splitlines()
+        passwd_lines = passwd_path.read_text(encoding="utf-8").splitlines()
     except OSError:
         return users
     for line in passwd_lines:
@@ -131,6 +132,8 @@ def local_users() -> list[dict[str, Any]]:
         if len(fields) != 7:
             continue
         username, _, uid, gid, gecos, home, shell = fields
+        if Path(shell).name == "nologin":
+            continue
         try:
             numeric_uid, numeric_gid = int(uid), int(gid)
         except ValueError:

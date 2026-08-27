@@ -34,8 +34,15 @@ def overview() -> dict[str, Any]:
     }
 
 
+@router.get("/resources")
+def resources() -> dict[str, Any]:
+    """返回供页面短周期刷新的 CPU 与内存快照。"""
+
+    return resource_snapshot()
+
+
 @router.get("/users")
 def users() -> list[dict[str, Any]]:
-    """列出 NSS 可见账号及可识别的 sudo 组来源。"""
+    """列出允许交互式登录的本机账号及可识别的 sudo 组来源。"""
 
     return local_users()

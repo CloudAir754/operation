@@ -19,6 +19,17 @@ uv run labopspanel
 
 启动命令默认自动选择可用端口、仅监听 `127.0.0.1` 并打开浏览器。终端输出的 URL 含有本次启动随机生成的会话令牌；前端读取后会立即清理地址栏。无 NVIDIA GPU 或 NVML 驱动时，GPU 区域显示 `N/A`，其他功能仍可使用。
 
+只读功能不需要 sudo。要启用账号创建、SSH 公钥导入和托管 sudo 规则，先审查安装脚本，再以未来启动面板的普通本机用户执行计划预览和安装：
+
+```bash
+labops_user=$(id -un)
+labops_uv=$(command -v uv)
+/usr/bin/python3 scripts/install_privileged_helper.py "$labops_user" --uv "$labops_uv" --dry-run
+sudo /usr/bin/python3 scripts/install_privileged_helper.py "$labops_user" --uv "$labops_uv"
+```
+
+安装器只支持 `amd64/x86_64`。它用 `uv tool` 在 `/usr/local/lib/labopspanel-tools` 创建 root 控制的隔离环境，将非符号链接入口原子安装到 `/usr/local/libexec/labopspanel-privileged`，并为指定启动用户写入只允许 `create-user`、`ssh-import`、`sudo-grant` 和 `sudo-revoke` 四个动作的独立 sudoers 文件。安装前、临时规则和安装后均运行 `visudo`；失败会恢复旧规则。项目升级后应重新运行安装器，使 root 助手与 Web 代码版本一致。
+
 当前原型提供：
 
 - 用户级 SQLite 数据库初始化，目录权限为 `0700`、文件权限为 `0600`；
@@ -340,4 +351,4 @@ LabOpsPanel
 
 阶段 1 只读原型已完成。阶段 2 已实现账号导入预览、PAM 实际策略读取、持久化任务状态机，以及受可信特权助手保护的幂等批量账号创建、一次性凭据导出、SSH 公钥导入和托管 sudo 规则；PAM 修改等写操作继续按实施状态推进。本机没有 NVIDIA GPU 时仅报告 NVML 不可用，不影响 CPU、内存、账号和存储功能。
 
-本机没有 NVIDIA GPU，NVML 不可用分支已经实机验证，多卡与进程字段通过模拟 NVML 自动化测试验证；RTX 3090 及更新硬件上的能力验证仍需在兼容性环境执行。阶段 2 至阶段 4 的写操作尚未开放，实施进度见 `docs/实施状态.md`。
+本机没有 NVIDIA GPU，NVML 不可用分支已经实机验证，多卡与进程字段通过模拟 NVML 自动化测试验证；RTX 3090 及更新硬件上的能力验证仍需在兼容性环境执行。尚未完成的阶段 2 功能以及阶段 3、阶段 4 写操作仍保持关闭，实施进度见 `docs/实施状态.md`。

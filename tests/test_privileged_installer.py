@@ -18,11 +18,13 @@ def test_sudoers_rule_only_allows_fixed_actions() -> None:
     content = MODULE.sudoers_content("operator", 1000)
 
     assert "operator ALL=(root) NOPASSWD:" in content
-    assert content.count("/usr/local/libexec/labopspanel-privileged") == 4
+    assert content.count("/usr/local/libexec/labopspanel-privileged") == 6
     assert "create-user" in content
     assert "ssh-import" in content
     assert "sudo-grant" in content
     assert "sudo-revoke" in content
+    assert "pam-update" in content
+    assert "pam-restore" in content
     assert " ALL\n" not in content
 
 

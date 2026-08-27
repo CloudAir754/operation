@@ -13,6 +13,7 @@ from typing import Any
 from lab_ops_panel.domain.ssh_keys import parse_public_key
 from lab_ops_panel.domain.user_imports import USERNAME
 from lab_ops_panel.infrastructure.authorized_keys import import_authorized_keys
+from lab_ops_panel.infrastructure.pam_rules import apply_policy_changes, restore_policy_backup
 from lab_ops_panel.infrastructure.sudo_rules import apply_sudo_grant, revoke_sudo_grant
 
 SYSTEM_COMMANDS = {
@@ -123,6 +124,13 @@ def _dispatch(action: str, payload: dict[str, Any]) -> dict[str, Any]:
 
     if action == "create-user":
         return _create_user(payload)
+    if action == "pam-update":
+        changes = payload.get("changes")
+        if not isinstance(changes, dict):
+            raise ValueError("PAM 策略参数无效")
+        return apply_policy_changes(changes)
+    if action == "pam-restore":
+        return restore_policy_backup(str(payload.get("backup_id", "")))
     username = str(payload.get("username", ""))
     account = _local_account(username)
     if account is None:

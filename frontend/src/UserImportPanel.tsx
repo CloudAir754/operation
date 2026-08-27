@@ -1,7 +1,15 @@
-import { Alert, Button, Card, Col, Form, Input, InputNumber, Modal, Row, Space, Steps, Switch, Table, Tabs, Tag, Typography, Upload } from 'antd'
+import { Alert, Button, Card, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Steps, Switch, Table, Tabs, Tag, Typography, Upload } from 'antd'
 import { useEffect, useState } from 'react'
-import { createUsers, deleteCredentials, downloadCredentials, loadDefaultPasswordPolicy, loadPamPolicy, loadPrivilegedCapability, loadTask, previewFileImport, previewPasswordPolicy, previewTextImport } from './api'
-import type { PamPolicySnapshot, PasswordPolicySummary, PasswordPolicyValues, PersistentTask, PrivilegedCapability, UserImportPreview } from './types'
+import { applyPamChange, createUsers, deleteCredentials, downloadCredentials, loadDefaultPasswordPolicy, loadPamPolicy, loadPrivilegedCapability, loadTask, previewFileImport, previewPamChange, previewPasswordPolicy, previewTextImport, restorePamBackup } from './api'
+import type { PamPolicyChangePreview, PamPolicyChangeValues, PamPolicySnapshot, PasswordPolicySummary, PasswordPolicyValues, PersistentTask, PrivilegedCapability, UserImportPreview } from './types'
+
+function taskBackupId(task: PersistentTask | null): string | null {
+  for (const step of task?.steps ?? []) {
+    const value = step.detail?.backup_id
+    if (typeof value === 'string' && /^[0-9a-f]{32}$/.test(value)) return value
+  }
+  return null
+}
 
 export default function UserImportPanel({ token }: { token: string }) {
   const [text, setText] = useState('')
@@ -16,6 +24,9 @@ export default function UserImportPanel({ token }: { token: string }) {
   const [capability, setCapability] = useState<PrivilegedCapability | null>(null)
   const [task, setTask] = useState<PersistentTask | null>(null)
   const [taskError, setTaskError] = useState('')
+  const [pamPreview, setPamPreview] = useState<PamPolicyChangePreview | null>(null)
+  const [pamTask, setPamTask] = useState<PersistentTask | null>(null)
+  const [pamError, setPamError] = useState('')
 
   useEffect(() => {
     loadDefaultPasswordPolicy(token).then(setPassword).catch(reason => {
@@ -38,6 +49,20 @@ export default function UserImportPanel({ token }: { token: string }) {
     }, 750)
     return () => window.clearInterval(timer)
   }, [task, token])
+
+  useEffect(() => {
+    if (!pamTask) return
+    if (['succeeded', 'failed', 'cancelled', 'rolled_back'].includes(pamTask.state)) {
+      if (pamTask.state === 'succeeded') void loadPamPolicy(token).then(setPam)
+      return
+    }
+    const timer = window.setInterval(() => {
+      loadTask(token, pamTask.id).then(setPamTask).catch(reason => {
+        setPamError(reason instanceof Error ? reason.message : '刷新 PAM 任务失败。')
+      })
+    }, 750)
+    return () => window.clearInterval(timer)
+  }, [pamTask, token])
 
   const runPreview = async (mode: 'text' | 'file') => {
     setLoading(true)
@@ -77,6 +102,57 @@ export default function UserImportPanel({ token }: { token: string }) {
           setTask(await createUsers(token, rows, password.policy))
         } catch (reason) {
           setTaskError(reason instanceof Error ? reason.message : '创建账号失败。')
+        }
+      },
+    })
+  }
+
+  const runPamPreview = async (values: PamPolicyChangeValues) => {
+    setPamError('')
+    try {
+      setPamPreview(await previewPamChange(token, values))
+    } catch (reason) {
+      setPamError(reason instanceof Error ? reason.message : 'PAM 修改预览失败。')
+    }
+  }
+
+  const confirmPamApply = () => {
+    if (!pamPreview?.supported) return
+    let confirmation = ''
+    Modal.confirm({
+      title: '修改全机 PAM 密码策略？',
+      content: <Space direction="vertical" className="full-width"><Typography.Text>该规则会影响所有本地用户。请输入：<Typography.Text code>{pamPreview.confirmation_text}</Typography.Text></Typography.Text><Input onChange={event => { confirmation = event.target.value }} /></Space>,
+      okText: '备份并修改',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        if (confirmation !== pamPreview.confirmation_text) throw new Error('确认文本不匹配')
+        try {
+          setPamTask(await applyPamChange(token, pamPreview.requested, confirmation))
+        } catch (reason) {
+          setPamError(reason instanceof Error ? reason.message : 'PAM 修改失败。')
+          throw reason
+        }
+      },
+    })
+  }
+
+  const confirmPamRestore = (backupId: string) => {
+    const expected = `恢复PAM备份:${backupId}`
+    let confirmation = ''
+    Modal.confirm({
+      title: '恢复修改前的 PAM 策略？',
+      content: <Space direction="vertical" className="full-width"><Typography.Text>只有当前配置仍等于该次应用结果时才允许恢复。请输入：<Typography.Text code>{expected}</Typography.Text></Typography.Text><Input onChange={event => { confirmation = event.target.value }} /></Space>,
+      okText: '验证并恢复',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        if (confirmation !== expected) throw new Error('确认文本不匹配')
+        try {
+          setPamTask(await restorePamBackup(token, backupId, confirmation))
+        } catch (reason) {
+          setPamError(reason instanceof Error ? reason.message : 'PAM 恢复失败。')
+          throw reason
         }
       },
     })
@@ -135,6 +211,27 @@ export default function UserImportPanel({ token }: { token: string }) {
           { title: '选项', key: 'options', render: (_, row) => row.options.join(' ') || '—' },
         ]} />
         <Typography.Text type="secondary">配置来源：{pam.config_sources.join('、') || '未检测到 pwquality 配置文件'}。首版不管理密码周期性到期。</Typography.Text>
+        <Card size="small" title="修改 pwquality 主配置">
+          <Alert className="notice" type="warning" showIcon message="修改会影响全机本地用户；空白字段保持当前值。模块行参数优先级更高时会阻断冲突字段。" />
+          <Form<PamPolicyChangeValues> layout="inline" onFinish={values => void runPamPreview(values)}>
+            <Form.Item label="最小长度" name="minlen"><InputNumber min={15} max={128} placeholder={String(pam.settings.minlen ?? 15)} /></Form.Item>
+            <Form.Item label="最少类别" name="minclass"><InputNumber min={0} max={4} placeholder={String(pam.settings.minclass ?? 0)} /></Form.Item>
+            <Form.Item label="大写 credit" name="ucredit"><InputNumber min={-20} max={0} placeholder={String(pam.settings.ucredit ?? 0)} /></Form.Item>
+            <Form.Item label="小写 credit" name="lcredit"><InputNumber min={-20} max={0} placeholder={String(pam.settings.lcredit ?? 0)} /></Form.Item>
+            <Form.Item label="数字 credit" name="dcredit"><InputNumber min={-20} max={0} placeholder={String(pam.settings.dcredit ?? 0)} /></Form.Item>
+            <Form.Item label="符号 credit" name="ocredit"><InputNumber min={-20} max={0} placeholder={String(pam.settings.ocredit ?? 0)} /></Form.Item>
+            <Form.Item label="最大重复" name="maxrepeat"><InputNumber min={0} max={128} placeholder={String(pam.settings.maxrepeat ?? 0)} /></Form.Item>
+            <Form.Item label="最大连续" name="maxsequence"><InputNumber min={0} max={128} placeholder={String(pam.settings.maxsequence ?? 0)} /></Form.Item>
+            <Form.Item label="同类连续" name="maxclassrepeat"><InputNumber min={0} max={128} placeholder={String(pam.settings.maxclassrepeat ?? 0)} /></Form.Item>
+            <Form.Item label="用户名检查" name="usercheck"><Select allowClear placeholder={String(pam.settings.usercheck ?? true)} options={[{ value: true, label: '启用' }, { value: false, label: '禁用' }]} /></Form.Item>
+            <Form.Item label="重试次数" name="retry"><InputNumber min={1} max={10} placeholder={String(pam.settings.retry ?? 3)} /></Form.Item>
+            <Form.Item label="与旧密码差异" name="difok"><InputNumber min={0} max={128} placeholder={String(pam.settings.difok ?? 0)} /></Form.Item>
+            <Form.Item><Button htmlType="submit" disabled={!pam.modification_supported}>生成修改预览</Button></Form.Item>
+          </Form>
+          {pamPreview && <Space direction="vertical" className="full-width"><Alert type={pamPreview.supported ? 'info' : 'error'} showIcon message={pamPreview.supported ? `将修改 ${Object.keys(pamPreview.requested).join('、')}` : pamPreview.reason} description={`目标文件：${pamPreview.config_path}`} /><Button danger type="primary" disabled={!pamPreview.supported || !capability?.available} onClick={confirmPamApply}>输入确认文本并应用</Button></Space>}
+          {pamError && <Alert className="notice" type="error" showIcon message={pamError} />}
+          {pamTask && <Card className="notice" size="small" title={`PAM 任务 ${pamTask.id}`} extra={<Tag color={pamTask.state === 'succeeded' ? 'green' : pamTask.state === 'failed' ? 'red' : 'blue'}>{pamTask.state}</Tag>}><Steps size="small" items={pamTask.steps.map(step => ({ title: step.name, status: step.state === 'succeeded' ? 'finish' : step.state === 'failed' ? 'error' : step.state === 'running' ? 'process' : 'wait' }))} />{pamTask.error && <Alert type="error" showIcon message={pamTask.error} />}{pamTask.state === 'succeeded' && taskBackupId(pamTask) && <Button danger onClick={() => confirmPamRestore(taskBackupId(pamTask)!)}>恢复该任务的修改前备份</Button>}</Card>}
+        </Card>
       </Space>}
     </Card></Col>
   </Row>

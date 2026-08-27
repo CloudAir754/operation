@@ -2,7 +2,7 @@
 
 一个按需启动、只管理当前 Ubuntu 机器的本地运维面板。管理员从终端启动程序，在浏览器中完成本机账号、密码、SSH 公钥、sudo、磁盘、文件和资源管理，操作结束后即可退出。
 
-> 当前仓库已完成阶段 1，并进入阶段 2。账号创建、SSH 公钥和托管 sudo 规则仅在管理员另行安装可信特权助手后开放；PAM 修改、文件迁移和磁盘初始化等其余写操作仍在开发中。
+> 当前仓库已完成阶段 1，并进入阶段 2。账号创建、SSH 公钥、托管 sudo 规则和经能力检测的 PAM 修改仅在管理员另行安装可信特权助手后开放；用户删除、文件迁移和磁盘初始化等其余写操作仍在开发中。
 
 ## 快速开始
 
@@ -28,7 +28,7 @@ labops_uv=$(command -v uv)
 sudo /usr/bin/python3 scripts/install_privileged_helper.py "$labops_user" --uv "$labops_uv"
 ```
 
-安装器只支持 `amd64/x86_64`。它用 `uv tool` 在 `/usr/local/lib/labopspanel-tools` 创建 root 控制的隔离环境，将非符号链接入口原子安装到 `/usr/local/libexec/labopspanel-privileged`，并为指定启动用户写入只允许 `create-user`、`ssh-import`、`sudo-grant` 和 `sudo-revoke` 四个动作的独立 sudoers 文件。安装前、临时规则和安装后均运行 `visudo`；失败会恢复旧规则。项目升级后应重新运行安装器，使 root 助手与 Web 代码版本一致。
+安装器只支持 `amd64/x86_64`。它用 `uv tool` 在 `/usr/local/lib/labopspanel-tools` 创建 root 控制的隔离环境，将非符号链接入口原子安装到 `/usr/local/libexec/labopspanel-privileged`，并为指定启动用户写入只允许账号创建、SSH 导入、sudo 授予/撤销和 PAM 修改/恢复六个固定动作的独立 sudoers 文件。安装前、临时规则和安装后均运行 `visudo`；失败会恢复旧规则。项目升级后应重新运行安装器，使 root 助手与 Web 代码版本一致。
 
 当前原型提供：
 
@@ -349,6 +349,6 @@ LabOpsPanel
 
 ## 十一、仓库状态
 
-阶段 1 只读原型已完成。阶段 2 已实现账号导入预览、PAM 实际策略读取、持久化任务状态机，以及受可信特权助手保护的幂等批量账号创建、一次性凭据导出、SSH 公钥导入和托管 sudo 规则；PAM 修改等写操作继续按实施状态推进。本机没有 NVIDIA GPU 时仅报告 NVML 不可用，不影响 CPU、内存、账号和存储功能。
+阶段 1 只读原型已完成。阶段 2 已实现账号导入预览、PAM 实际策略读取与可恢复修改、持久化任务状态机，以及受可信特权助手保护的幂等批量账号创建、一次性凭据导出、SSH 公钥导入和托管 sudo 规则；用户删除等写操作继续按实施状态推进。本机没有 NVIDIA GPU 时仅报告 NVML 不可用，不影响 CPU、内存、账号和存储功能。
 
 本机没有 NVIDIA GPU，NVML 不可用分支已经实机验证，多卡与进程字段通过模拟 NVML 自动化测试验证；RTX 3090 及更新硬件上的能力验证仍需在兼容性环境执行。尚未完成的阶段 2 功能以及阶段 3、阶段 4 写操作仍保持关闭，实施进度见 `docs/实施状态.md`。

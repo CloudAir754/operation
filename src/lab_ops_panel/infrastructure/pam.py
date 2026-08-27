@@ -167,8 +167,10 @@ def pam_policy_snapshot(
     entries, pam_warnings = _pam_password_entries(common_password)
     warnings.extend(pam_warnings)
     pwquality_entries = [entry for entry in entries if entry["module"].endswith("pam_pwquality.so")]
+    module_settings: dict[str, int | bool] = {}
     for entry in pwquality_entries:
         values, option_warnings = _module_settings(entry["options"])
+        module_settings.update(values)
         settings.update(values)
         warnings.extend(option_warnings)
     module_installed = any(Path("/").glob(module_glob.lstrip("/")))
@@ -187,6 +189,7 @@ def pam_policy_snapshot(
         "pwquality_module_installed": module_installed,
         "pwquality_enabled": bool(pwquality_entries),
         "settings": settings,
+        "module_settings": module_settings,
         "config_sources": config_sources,
         "generation_minimums": _generation_minimums(settings),
         "warnings": sorted(set(warnings)),

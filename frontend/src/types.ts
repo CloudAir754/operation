@@ -244,6 +244,7 @@ export interface PamPolicySnapshot {
   pwquality_module_installed: boolean
   pwquality_enabled: boolean
   settings: Record<string, number | boolean>
+  module_settings: Record<string, number | boolean>
   config_sources: string[]
   generation_minimums: {
     length: number
@@ -257,6 +258,32 @@ export interface PamPolicySnapshot {
   modification_supported: boolean
   modification_reason: string | null
   password_aging_managed: false
+}
+
+export interface PamPolicyChangeValues {
+  minlen?: number
+  dcredit?: number
+  ucredit?: number
+  lcredit?: number
+  ocredit?: number
+  minclass?: number
+  maxrepeat?: number
+  maxsequence?: number
+  maxclassrepeat?: number
+  usercheck?: boolean
+  retry?: number
+  difok?: number
+}
+
+export interface PamPolicyChangePreview {
+  supported: boolean
+  reason: string | null
+  config_path: string
+  current: Record<string, number | boolean>
+  requested: PamPolicyChangeValues
+  effective_after: Record<string, number | boolean>
+  module_conflicts: string[]
+  confirmation_text: string
 }
 
 export interface PrivilegedCapability {

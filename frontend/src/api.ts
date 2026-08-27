@@ -1,4 +1,4 @@
-import type { GpuSnapshot, HomeScanTask, Overview, PamPolicySnapshot, PasswordPolicySummary, PasswordPolicyValues, PersistentTask, PrivilegedCapability, ResourceSnapshot, StorageSnapshot, UserAccount, UserImportPreview } from './types'
+import type { GpuSnapshot, HomeScanTask, Overview, PamPolicyChangePreview, PamPolicyChangeValues, PamPolicySnapshot, PasswordPolicySummary, PasswordPolicyValues, PersistentTask, PrivilegedCapability, ResourceSnapshot, StorageSnapshot, UserAccount, UserImportPreview } from './types'
 
 async function errorDetail(response: Response, fallback: string): Promise<string> {
   const body = await response.json().catch(() => null) as { detail?: string } | null
@@ -243,5 +243,46 @@ export async function changeSudo(
     body: JSON.stringify({ idempotency_key: crypto.randomUUID() }),
   })
   if (!response.ok) throw new Error(await errorDetail(response, grant ? 'sudo 授权失败。' : 'sudo 撤销失败。'))
+  return response.json() as Promise<PersistentTask>
+}
+
+export async function previewPamChange(
+  token: string,
+  changes: PamPolicyChangeValues,
+): Promise<PamPolicyChangePreview> {
+  const response = await fetch('/api/v1/pam-policy/change-preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({ changes }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, 'PAM 修改预览失败。'))
+  return response.json() as Promise<PamPolicyChangePreview>
+}
+
+export async function applyPamChange(
+  token: string,
+  changes: PamPolicyChangeValues,
+  confirmation: string,
+): Promise<PersistentTask> {
+  const response = await fetch('/api/v1/pam-policy/apply', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({ changes, confirmation, idempotency_key: crypto.randomUUID() }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, 'PAM 修改任务启动失败。'))
+  return response.json() as Promise<PersistentTask>
+}
+
+export async function restorePamBackup(
+  token: string,
+  backupId: string,
+  confirmation: string,
+): Promise<PersistentTask> {
+  const response = await fetch('/api/v1/pam-policy/restore', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({ backup_id: backupId, confirmation, idempotency_key: crypto.randomUUID() }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, 'PAM 恢复任务启动失败。'))
   return response.json() as Promise<PersistentTask>
 }

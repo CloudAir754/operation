@@ -10,7 +10,16 @@ from typing import Any
 
 DEFAULT_HELPER = Path("/usr/local/libexec/labopspanel-privileged")
 SUDO = Path("/usr/bin/sudo")
-ALLOWED_ACTIONS = frozenset({"create-user", "ssh-import", "sudo-grant", "sudo-revoke"})
+ALLOWED_ACTIONS = frozenset(
+    {
+        "create-user",
+        "ssh-import",
+        "sudo-grant",
+        "sudo-revoke",
+        "pam-update",
+        "pam-restore",
+    }
+)
 
 
 def helper_capability(path: Path = DEFAULT_HELPER) -> dict[str, Any]:

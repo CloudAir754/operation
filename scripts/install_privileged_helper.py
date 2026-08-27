@@ -15,7 +15,14 @@ import tempfile
 from pathlib import Path
 
 USERNAME = re.compile(r"^[a-z_][a-z0-9_-]{0,30}[$]?$")
-ACTIONS = ("create-user", "ssh-import", "sudo-grant", "sudo-revoke")
+ACTIONS = (
+    "create-user",
+    "ssh-import",
+    "sudo-grant",
+    "sudo-revoke",
+    "pam-update",
+    "pam-restore",
+)
 HELPER = Path("/usr/local/libexec/labopspanel-privileged")
 TOOL_DIRECTORY = Path("/usr/local/lib/labopspanel-tools")
 TOOL_BINARY = TOOL_DIRECTORY / "lab-ops-panel/bin/labopspanel-privileged"

@@ -268,3 +268,82 @@ def test_ssh_and_sudo_actions_use_revalidated_uid(tmp_path: Path, monkeypatch) -
     assert ssh.status_code == sudo.status_code == 202
     assert calls[0][1:3] == ("alice", 1000)
     assert calls[1][1:4] == ("alice", 1000, True)
+
+
+def test_pam_change_requires_preview_capability_and_exact_confirmation(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    """PAM 修改只有能力检测通过且确认文本完全匹配时才启动。"""
+
+    snapshot = {
+        "modification_supported": True,
+        "modification_reason": None,
+        "settings": {"minlen": 15, "usercheck": True},
+        "module_settings": {},
+    }
+    monkeypatch.setattr("lab_ops_panel.api.routes.pam_policy_snapshot", lambda: snapshot)
+    monkeypatch.setattr(
+        "lab_ops_panel.api.routes.helper_capability",
+        lambda path: {"available": True, "reason": None, "path": str(path)},
+    )
+    task = {"id": "pamtask", "state": "queued", "steps": []}
+    calls = []
+    client, headers = _client(tmp_path)
+    with client:
+        client.app.state.pam_policy.start_update = lambda changes, idempotency_key: (
+            calls.append((changes, idempotency_key)) or task
+        )
+        preview = client.post(
+            "/api/v1/pam-policy/change-preview",
+            headers=headers,
+            json={"changes": {"minlen": 20, "maxrepeat": 3}},
+        )
+        rejected = client.post(
+            "/api/v1/pam-policy/apply",
+            headers=headers,
+            json={
+                "changes": {"minlen": 20},
+                "confirmation": "错误文本",
+                "idempotency_key": "pam-update-key-123",
+            },
+        )
+        accepted = client.post(
+            "/api/v1/pam-policy/apply",
+            headers=headers,
+            json={
+                "changes": {"minlen": 20},
+                "confirmation": "修改全机PAM策略",
+                "idempotency_key": "pam-update-key-123",
+            },
+        )
+
+    assert preview.status_code == 200
+    assert preview.json()["effective_after"]["minlen"] == 20
+    assert rejected.status_code == 400
+    assert accepted.status_code == 202
+    assert calls == [({"minlen": 20}, "pam-update-key-123")]
+
+
+def test_pam_preview_reports_module_option_conflict(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """模块行参数覆盖主配置时，预览必须明确阻断修改。"""
+
+    monkeypatch.setattr(
+        "lab_ops_panel.api.routes.pam_policy_snapshot",
+        lambda: {
+            "modification_supported": True,
+            "modification_reason": None,
+            "settings": {"minlen": 24},
+            "module_settings": {"minlen": 24},
+        },
+    )
+    client, headers = _client(tmp_path)
+    with client:
+        response = client.post(
+            "/api/v1/pam-policy/change-preview",
+            headers=headers,
+            json={"changes": {"minlen": 20}},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["supported"] is False
+    assert response.json()["module_conflicts"] == ["minlen"]

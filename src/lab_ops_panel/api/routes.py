@@ -7,7 +7,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from lab_ops_panel.application.credentials import (
     delete_initial_credentials,
@@ -19,6 +19,7 @@ from lab_ops_panel.domain.ssh_keys import parse_public_key, preview_public_keys
 from lab_ops_panel.domain.user_imports import RawImportRow, validate_import_rows
 from lab_ops_panel.infrastructure.gpu import gpu_snapshot
 from lab_ops_panel.infrastructure.pam import pam_policy_snapshot
+from lab_ops_panel.infrastructure.pam_rules import validate_policy_changes
 from lab_ops_panel.infrastructure.privileged import helper_capability
 from lab_ops_panel.infrastructure.resources import resource_snapshot
 from lab_ops_panel.infrastructure.scans import TERMINAL_STATES, home_scan_manager
@@ -59,16 +60,59 @@ class PasswordPolicyRequest(BaseModel):
     exclude_ambiguous: bool = True
 
 
+class AccountActionRequest(BaseModel):
+    """系统写任务共用的幂等参数。"""
+
+    idempotency_key: str = Field(min_length=16, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class PamPolicyChanges(BaseModel):
+    """首版允许修改的 pwquality 字段及保守取值范围。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    minlen: int | None = Field(default=None, ge=15, le=128)
+    dcredit: int | None = Field(default=None, ge=-20, le=0)
+    ucredit: int | None = Field(default=None, ge=-20, le=0)
+    lcredit: int | None = Field(default=None, ge=-20, le=0)
+    ocredit: int | None = Field(default=None, ge=-20, le=0)
+    minclass: int | None = Field(default=None, ge=0, le=4)
+    maxrepeat: int | None = Field(default=None, ge=0, le=128)
+    maxsequence: int | None = Field(default=None, ge=0, le=128)
+    maxclassrepeat: int | None = Field(default=None, ge=0, le=128)
+    usercheck: bool | None = None
+    retry: int | None = Field(default=None, ge=1, le=10)
+    difok: int | None = Field(default=None, ge=0, le=128)
+
+    def validated(self) -> dict[str, int | bool]:
+        """去除未提交字段并复用基础设施层白名单校验。"""
+
+        return validate_policy_changes(self.model_dump(exclude_none=True))
+
+
+class PamPolicyPreviewRequest(BaseModel):
+    """PAM 策略修改预览参数。"""
+
+    changes: PamPolicyChanges
+
+
+class PamPolicyApplyRequest(PamPolicyPreviewRequest, AccountActionRequest):
+    """经固定确认文本授权的 PAM 修改任务。"""
+
+    confirmation: str = Field(max_length=50)
+
+
+class PamPolicyRestoreRequest(AccountActionRequest):
+    """指定可验证备份的 PAM 恢复任务。"""
+
+    backup_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    confirmation: str = Field(max_length=80)
+
+
 class SshKeyPreviewRequest(BaseModel):
     """SSH 公钥粘贴预览参数。"""
 
     keys: str = Field(max_length=100_000)
-
-
-class AccountActionRequest(BaseModel):
-    """账号访问控制写任务的幂等参数。"""
-
-    idempotency_key: str = Field(min_length=16, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
 
 
 class SshKeyImportRequest(AccountActionRequest):
@@ -214,6 +258,69 @@ def actual_pam_policy() -> dict[str, Any]:
     """返回当前实际可见的 PAM 密码堆栈和 pwquality 能力。"""
 
     return pam_policy_snapshot()
+
+
+def _pam_change_preview(changes: dict[str, int | bool]) -> dict[str, Any]:
+    """基于当前实际策略生成不写文件的修改判定。"""
+
+    current = pam_policy_snapshot()
+    conflicts = sorted(set(changes) & set(current.get("module_settings", {})))
+    supported = bool(current["modification_supported"]) and not conflicts
+    reason = current["modification_reason"]
+    if conflicts:
+        reason = f"PAM 模块参数覆盖了待修改字段：{', '.join(conflicts)}"
+    effective_after = dict(current["settings"])
+    if supported:
+        effective_after.update(changes)
+    return {
+        "supported": supported,
+        "reason": reason,
+        "config_path": "/etc/security/pwquality.conf",
+        "current": current["settings"],
+        "requested": changes,
+        "effective_after": effective_after,
+        "module_conflicts": conflicts,
+        "confirmation_text": "修改全机PAM策略",
+    }
+
+
+@router.post("/pam-policy/change-preview")
+def preview_pam_change(request: PamPolicyPreviewRequest) -> dict[str, Any]:
+    """预览 PAM 修改的当前值、目标值和能力冲突。"""
+
+    return _pam_change_preview(request.changes.validated())
+
+
+@router.post("/pam-policy/apply", status_code=202)
+def apply_pam_change(request: PamPolicyApplyRequest, http_request: Request) -> dict[str, Any]:
+    """明确确认后启动带备份和自动恢复的 PAM 修改任务。"""
+
+    _require_privileged_helper(http_request)
+    if request.confirmation != "修改全机PAM策略":
+        raise HTTPException(status_code=400, detail="PAM 修改确认文本不匹配")
+    changes = request.changes.validated()
+    preview = _pam_change_preview(changes)
+    if not preview["supported"]:
+        raise HTTPException(status_code=409, detail=preview["reason"])
+    try:
+        return http_request.app.state.pam_policy.start_update(changes, request.idempotency_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/pam-policy/restore", status_code=202)
+def restore_pam_change(request: PamPolicyRestoreRequest, http_request: Request) -> dict[str, Any]:
+    """输入绑定备份 ID 的确认文本后启动恢复任务。"""
+
+    _require_privileged_helper(http_request)
+    if request.confirmation != f"恢复PAM备份:{request.backup_id}":
+        raise HTTPException(status_code=400, detail="PAM 恢复确认文本不匹配")
+    try:
+        return http_request.app.state.pam_policy.start_restore(
+            request.backup_id, request.idempotency_key
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/ssh-keys/preview")

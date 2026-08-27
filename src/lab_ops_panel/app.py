@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from lab_ops_panel.api.routes import router
 from lab_ops_panel.application.account_access import AccountAccessManager
+from lab_ops_panel.application.pam_policy import PamPolicyManager
 from lab_ops_panel.application.user_creation import UserCreationManager
 from lab_ops_panel.config import Settings, ensure_unprivileged
 from lab_ops_panel.database import initialize_database
@@ -37,9 +38,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app.state.tasks, app.state.privileged, active_settings.data_dir
         )
         app.state.account_access = AccountAccessManager(app.state.tasks, app.state.privileged)
+        app.state.pam_policy = PamPolicyManager(app.state.tasks, app.state.privileged)
         try:
             yield
         finally:
+            app.state.pam_policy.close()
             app.state.account_access.close()
             app.state.user_creation.close()
 

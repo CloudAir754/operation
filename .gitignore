@@ -1,0 +1,30 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node.js
+node_modules/
+dist/
+coverage/
+
+# 编辑器与系统文件
+.idea/
+.vscode/
+.DS_Store
+
+# 本地配置、凭据和运行数据
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.db
+*.sqlite*
+data/
+logs/
+scan-results/

@@ -305,3 +305,24 @@ export interface PersistentTask {
     detail: Record<string, unknown> | null
   }>
 }
+
+export interface PortUsageSnapshot {
+  port: number
+  protocol: 'tcp' | 'udp' | 'any'
+  complete: boolean
+  reason: string | null
+  connections: Array<{
+    protocol: string
+    family: string
+    local_address: string | null
+    local_port: number
+    remote_address: string | null
+    remote_port: number | null
+    status: string | null
+    pid: number | null
+    uid: number | null
+    username: string | null
+    create_time: number | null
+    command: string | null
+  }>
+}

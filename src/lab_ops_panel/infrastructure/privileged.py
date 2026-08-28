@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 import subprocess
 from pathlib import Path
@@ -18,6 +19,9 @@ ALLOWED_ACTIONS = frozenset(
         "sudo-revoke",
         "pam-update",
         "pam-restore",
+        "port-lookup",
+        "process-terminate",
+        "uid-processes-terminate",
     }
 )
 
@@ -62,7 +66,10 @@ class PrivilegedExecutor:
         capability = helper_capability(self.helper_path)
         if not capability["available"]:
             raise RuntimeError(str(capability["reason"]))
-        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        request_payload = dict(payload)
+        if action in {"process-terminate", "uid-processes-terminate"}:
+            request_payload["requester_pid"] = os.getpid()
+        encoded = json.dumps(request_payload, ensure_ascii=False, separators=(",", ":"))
         if len(encoded.encode()) > 1_000_000:
             raise ValueError("特权动作参数过大")
         try:

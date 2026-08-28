@@ -14,6 +14,11 @@ from lab_ops_panel.domain.ssh_keys import parse_public_key
 from lab_ops_panel.domain.user_imports import USERNAME
 from lab_ops_panel.infrastructure.authorized_keys import import_authorized_keys
 from lab_ops_panel.infrastructure.pam_rules import apply_policy_changes, restore_policy_backup
+from lab_ops_panel.infrastructure.processes import (
+    port_usage,
+    terminate_process,
+    terminate_uid_processes,
+)
 from lab_ops_panel.infrastructure.sudo_rules import apply_sudo_grant, revoke_sudo_grant
 
 SYSTEM_COMMANDS = {
@@ -131,6 +136,35 @@ def _dispatch(action: str, payload: dict[str, Any]) -> dict[str, Any]:
         return apply_policy_changes(changes)
     if action == "pam-restore":
         return restore_policy_backup(str(payload.get("backup_id", "")))
+    if action == "port-lookup":
+        port = payload.get("port")
+        protocol = payload.get("protocol", "any")
+        if not isinstance(port, int) or not isinstance(protocol, str):
+            raise ValueError("端口查询参数无效")
+        return port_usage(port, protocol)
+    if action == "process-terminate":
+        pid = payload.get("pid")
+        expected_uid = payload.get("uid")
+        create_time = payload.get("create_time")
+        requester_pid = payload.get("requester_pid")
+        grace_seconds = payload.get("grace_seconds", 5)
+        values = (pid, expected_uid, create_time, requester_pid, grace_seconds)
+        if not all(isinstance(value, int | float) for value in values):
+            raise ValueError("进程终止参数无效")
+        return terminate_process(
+            int(pid),
+            int(expected_uid),
+            float(create_time),
+            int(requester_pid),
+            float(grace_seconds),
+        )
+    if action == "uid-processes-terminate":
+        uid = payload.get("uid")
+        requester_pid = payload.get("requester_pid")
+        grace_seconds = payload.get("grace_seconds", 5)
+        if not all(isinstance(value, int | float) for value in (uid, requester_pid, grace_seconds)):
+            raise ValueError("用户进程终止参数无效")
+        return terminate_uid_processes(int(uid), int(requester_pid), float(grace_seconds))
     username = str(payload.get("username", ""))
     account = _local_account(username)
     if account is None:

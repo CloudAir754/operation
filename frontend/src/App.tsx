@@ -1,7 +1,7 @@
 import { CloudServerOutlined, DatabaseOutlined, DesktopOutlined } from '@ant-design/icons'
 import { Alert, Button, Card, Col, Descriptions, Input, Layout, Modal, Progress, Row, Space, Spin, Steps, Table, Tag, Typography } from 'antd'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import { cancelHomeScan, changeSudo, importSshKeys, loadGpu, loadOverview, loadPrivilegedCapability, loadResources, loadStorage, loadTask, loadUsers, readSessionToken, startHomeScan, watchHomeScan } from './api'
+import { cancelHomeScan, changeSudo, importSshKeys, loadGpu, loadOverview, loadPrivilegedCapability, loadResources, loadStorage, loadTask, loadUsers, readSessionToken, startHomeScan, terminateUserProcesses, watchHomeScan } from './api'
 import type { HomeScanTask, MountPoint, Overview, PersistentTask, PrivilegedCapability, StorageSnapshot, UserAccount } from './types'
 import { filterUsersByUsername } from './userFilters'
 import './styles.css'
@@ -9,6 +9,7 @@ import './styles.css'
 const { Header, Content } = Layout
 const TreemapView = lazy(() => import('./TreemapView'))
 const UserImportPanel = lazy(() => import('./UserImportPanel'))
+const ProcessPanel = lazy(() => import('./ProcessPanel'))
 
 function bytes(value: number | null): string {
   if (value === null) return 'N/A'
@@ -167,6 +168,27 @@ export default function App() {
     })
   }
 
+  const confirmTerminateUserProcesses = (username: string) => {
+    const expected = `结束全部进程:${username}`
+    let confirmation = ''
+    Modal.confirm({
+      title: `结束 ${username} 的全部进程？`,
+      content: <Space direction="vertical" className="full-width"><Typography.Text>将按 UID 向全部进程发送 TERM，等待后按需发送 KILL，并重复扫描。请输入：<Typography.Text code>{expected}</Typography.Text></Typography.Text><Input onChange={event => { confirmation = event.target.value }} /></Space>,
+      okText: '确认结束全部进程',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        if (confirmation !== expected) throw new Error('确认文本不匹配')
+        try {
+          setAccessTask(await terminateUserProcesses(sessionToken.current, username, confirmation))
+        } catch (reason) {
+          setAccessError(reason instanceof Error ? reason.message : '结束用户进程失败。')
+          throw reason
+        }
+      },
+    })
+  }
+
   if (error) return <main className="center"><Alert type="error" showIcon message={error} /></main>
   if (!overview) return <main className="center"><Spin size="large" tip="正在读取本机状态" /></main>
 
@@ -265,6 +287,7 @@ export default function App() {
             { title: '发送', key: 'sent', render: (_, row) => rate(row.sent_bytes_per_second) },
             { title: '错误 / 丢包', key: 'errors', render: (_, row) => `${row.errors_in + row.errors_out} / ${row.drops_in + row.drops_out}` },
           ]} /></Card></Col>
+          <Col span={24}><Suspense fallback={<Spin tip="正在加载端口查询工具" />}><ProcessPanel token={sessionToken.current} privileged={Boolean(privileged?.available)} /></Suspense></Col>
           <Col span={24}><Card title="本机账号" extra={<Input.Search allowClear placeholder="搜索用户名" onChange={event => setUsernameQuery(event.target.value)} value={usernameQuery} className="user-search" />}>
             <Table<UserAccount>
               rowKey="uid"
@@ -282,7 +305,7 @@ export default function App() {
                 { title: 'home 文件系统', key: 'home_storage', render: (_, row) => row.home_storage ? <Space wrap><Tag>{row.home_storage.filesystem}</Tag><span>{row.home_storage.mountpoint}</span><span>可用 {bytes(row.home_storage.free)}</span>{row.home_storage.read_only && <Tag color="orange">只读</Tag>}</Space> : 'N/A' },
                 { title: 'sudo 来源', key: 'sudo', render: (_, row) => <Space wrap>{row.sudo_sources.length ? row.sudo_sources.map(source => <Tag key={source} color="gold">{source}</Tag>) : '无'}{!row.sudo_sources_complete && <Tag color="orange">读取受限</Tag>}</Space> },
                 { title: '空间扫描', key: 'scan', fixed: 'right', render: (_, row) => <Button size="small" onClick={() => void scanHome(row.username)} disabled={homeScan?.state === 'queued' || homeScan?.state === 'running'}>扫描 home</Button> },
-                { title: '登录与权限', key: 'access', fixed: 'right', render: (_, row) => <Space><Button size="small" disabled={!privileged?.available} onClick={() => openSshImport(row.username)}>导入 SSH 公钥</Button><Button size="small" danger disabled={!privileged?.available} onClick={() => confirmSudo(row.username, true)}>授予 sudo</Button><Button size="small" disabled={!privileged?.available} onClick={() => confirmSudo(row.username, false)}>撤销托管规则</Button></Space> },
+                { title: '登录与权限', key: 'access', fixed: 'right', render: (_, row) => <Space><Button size="small" disabled={!privileged?.available} onClick={() => openSshImport(row.username)}>导入 SSH 公钥</Button><Button size="small" danger disabled={!privileged?.available} onClick={() => confirmSudo(row.username, true)}>授予 sudo</Button><Button size="small" disabled={!privileged?.available} onClick={() => confirmSudo(row.username, false)}>撤销托管规则</Button><Button size="small" danger disabled={!privileged?.available} onClick={() => confirmTerminateUserProcesses(row.username)}>结束全部进程</Button></Space> },
               ]}
             />
             {accessError && <Alert className="notice" type="error" showIcon message={accessError} />}

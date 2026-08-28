@@ -1,4 +1,4 @@
-import type { GpuSnapshot, HomeScanTask, Overview, PamPolicyChangePreview, PamPolicyChangeValues, PamPolicySnapshot, PasswordPolicySummary, PasswordPolicyValues, PersistentTask, PrivilegedCapability, ResourceSnapshot, StorageSnapshot, UserAccount, UserImportPreview } from './types'
+import type { GpuSnapshot, HomeScanTask, Overview, PamPolicyChangePreview, PamPolicyChangeValues, PamPolicySnapshot, PasswordPolicySummary, PasswordPolicyValues, PersistentTask, PortUsageSnapshot, PrivilegedCapability, ResourceSnapshot, StorageSnapshot, UserAccount, UserImportPreview } from './types'
 
 async function errorDetail(response: Response, fallback: string): Promise<string> {
   const body = await response.json().catch(() => null) as { detail?: string } | null
@@ -284,5 +284,55 @@ export async function restorePamBackup(
     body: JSON.stringify({ backup_id: backupId, confirmation, idempotency_key: crypto.randomUUID() }),
   })
   if (!response.ok) throw new Error(await errorDetail(response, 'PAM 恢复任务启动失败。'))
+  return response.json() as Promise<PersistentTask>
+}
+
+export async function lookupPort(
+  token: string,
+  port: number,
+  protocol: 'tcp' | 'udp' | 'any',
+): Promise<PortUsageSnapshot> {
+  const response = await fetch(`/api/v1/ports/${port}?protocol=${protocol}`, {
+    headers: { 'X-LabOps-Token': token },
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '查询端口占用失败。'))
+  return response.json() as Promise<PortUsageSnapshot>
+}
+
+export async function terminateProcess(
+  token: string,
+  process: { pid: number, uid: number, create_time: number },
+  confirmation: string,
+): Promise<PersistentTask> {
+  const response = await fetch(`/api/v1/processes/${process.pid}/terminate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({
+      expected_uid: process.uid,
+      expected_create_time: process.create_time,
+      grace_seconds: 5,
+      confirmation,
+      idempotency_key: crypto.randomUUID(),
+    }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '终止进程任务启动失败。'))
+  return response.json() as Promise<PersistentTask>
+}
+
+export async function terminateUserProcesses(
+  token: string,
+  username: string,
+  confirmation: string,
+): Promise<PersistentTask> {
+  const response = await fetch(`/api/v1/users/${encodeURIComponent(username)}/processes/terminate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({
+      grace_seconds: 5,
+      confirmation,
+      idempotency_key: crypto.randomUUID(),
+    }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '结束用户全部进程任务启动失败。'))
   return response.json() as Promise<PersistentTask>
 }

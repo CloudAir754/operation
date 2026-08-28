@@ -2,10 +2,11 @@
 
 import asyncio
 import json
+import os
 from collections.abc import AsyncIterator
 from typing import Annotated, Any
 
-from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -21,6 +22,11 @@ from lab_ops_panel.infrastructure.gpu import gpu_snapshot
 from lab_ops_panel.infrastructure.pam import pam_policy_snapshot
 from lab_ops_panel.infrastructure.pam_rules import validate_policy_changes
 from lab_ops_panel.infrastructure.privileged import helper_capability
+from lab_ops_panel.infrastructure.processes import (
+    minimum_regular_uid,
+    port_usage,
+    process_identity,
+)
 from lab_ops_panel.infrastructure.resources import resource_snapshot
 from lab_ops_panel.infrastructure.scans import TERMINAL_STATES, home_scan_manager
 from lab_ops_panel.infrastructure.storage import block_device_snapshot
@@ -109,6 +115,22 @@ class PamPolicyRestoreRequest(AccountActionRequest):
     confirmation: str = Field(max_length=80)
 
 
+class ProcessTerminateRequest(AccountActionRequest):
+    """绑定稳定进程身份的单进程终止参数。"""
+
+    expected_uid: int = Field(gt=0)
+    expected_create_time: float = Field(gt=0)
+    grace_seconds: int = Field(default=5, ge=1, le=30)
+    confirmation: str = Field(max_length=80)
+
+
+class UidProcessesTerminateRequest(AccountActionRequest):
+    """按用户结束全部进程的确认参数。"""
+
+    grace_seconds: int = Field(default=5, ge=1, le=30)
+    confirmation: str = Field(max_length=100)
+
+
 class SshKeyPreviewRequest(BaseModel):
     """SSH 公钥粘贴预览参数。"""
 
@@ -182,6 +204,30 @@ def gpu() -> dict[str, Any]:
     """返回可短周期刷新的 GPU 与当前进程快照。"""
 
     return gpu_snapshot()
+
+
+@router.get("/ports/{port}")
+def lookup_port(
+    port: int,
+    request: Request,
+    protocol: str = Query(default="any", pattern=r"^(tcp|udp|any)$"),
+) -> dict[str, Any]:
+    """查询本地端口；可信助手可用时返回完整 root 视图，否则明确降级。"""
+
+    if not 1 <= port <= 65535:
+        raise HTTPException(status_code=400, detail="端口必须在 1 到 65535 之间")
+    capability = helper_capability(request.app.state.privileged.helper_path)
+    if capability["available"]:
+        try:
+            return request.app.state.privileged.execute(
+                "port-lookup", {"port": port, "protocol": protocol}
+            )
+        except RuntimeError:
+            pass
+    try:
+        return port_usage(port, protocol)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/users")
@@ -334,9 +380,66 @@ def _interactive_local_account(username: str) -> dict[str, Any]:
     """只允许当前仍可交互登录的本机账号参与写操作。"""
 
     account = next((user for user in local_users() if user["username"] == username), None)
-    if account is None or account["account_source"] != "local":
+    if (
+        account is None
+        or account["account_source"] != "local"
+        or int(account["uid"]) < minimum_regular_uid()
+    ):
         raise HTTPException(status_code=404, detail="未找到可管理的本机交互式账号")
     return account
+
+
+@router.post("/processes/{pid}/terminate", status_code=202)
+def terminate_single_process(
+    pid: int, request: ProcessTerminateRequest, http_request: Request
+) -> dict[str, Any]:
+    """确认稳定进程身份后启动 TERM/KILL 任务。"""
+
+    _require_privileged_helper(http_request)
+    if request.confirmation != f"结束进程:{pid}":
+        raise HTTPException(status_code=400, detail="进程终止确认文本不匹配")
+    try:
+        identity = process_identity(pid)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if identity["uid"] < minimum_regular_uid():
+        raise HTTPException(status_code=403, detail="拒绝终止 root 或系统账号进程")
+    if (
+        identity["uid"] != request.expected_uid
+        or abs(identity["create_time"] - request.expected_create_time) > 0.01
+    ):
+        raise HTTPException(status_code=409, detail="进程身份已变化，请重新查询端口")
+    try:
+        return http_request.app.state.process_control.start_process_termination(
+            pid,
+            request.expected_uid,
+            request.expected_create_time,
+            request.grace_seconds,
+            request.idempotency_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/users/{username}/processes/terminate", status_code=202)
+def terminate_all_user_processes(
+    username: str, request: UidProcessesTerminateRequest, http_request: Request
+) -> dict[str, Any]:
+    """输入用户名绑定确认文本后，按稳定 UID 终止普通用户全部进程。"""
+
+    _require_privileged_helper(http_request)
+    account = _interactive_local_account(username)
+    uid = int(account["uid"])
+    if uid == os.getuid():
+        raise HTTPException(status_code=403, detail="拒绝结束启动 LabOpsPanel 用户的全部进程")
+    if request.confirmation != f"结束全部进程:{username}":
+        raise HTTPException(status_code=400, detail="用户进程终止确认文本不匹配")
+    try:
+        return http_request.app.state.process_control.start_uid_termination(
+            username, uid, request.grace_seconds, request.idempotency_key
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _require_privileged_helper(request: Request) -> None:

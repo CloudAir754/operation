@@ -22,6 +22,9 @@ ACTIONS = (
     "sudo-revoke",
     "pam-update",
     "pam-restore",
+    "port-lookup",
+    "process-terminate",
+    "uid-processes-terminate",
 )
 HELPER = Path("/usr/local/libexec/labopspanel-privileged")
 TOOL_DIRECTORY = Path("/usr/local/lib/labopspanel-tools")

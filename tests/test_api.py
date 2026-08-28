@@ -347,3 +347,110 @@ def test_pam_preview_reports_module_option_conflict(tmp_path: Path, monkeypatch)
     assert response.status_code == 200
     assert response.json()["supported"] is False
     assert response.json()["module_conflicts"] == ["minlen"]
+
+
+def test_port_lookup_degrades_without_privileged_helper(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """助手未安装时仍返回普通用户可见结果，并明确标记不完整。"""
+
+    monkeypatch.setattr(
+        "lab_ops_panel.api.routes.helper_capability",
+        lambda path: {"available": False, "reason": "未安装", "path": str(path)},
+    )
+    monkeypatch.setattr(
+        "lab_ops_panel.api.routes.port_usage",
+        lambda port, protocol: {
+            "port": port,
+            "protocol": protocol,
+            "complete": False,
+            "reason": "权限受限",
+            "connections": [],
+        },
+    )
+    client, headers = _client(tmp_path)
+    with client:
+        response = client.get("/api/v1/ports/8080?protocol=tcp", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["complete"] is False
+    assert response.json()["port"] == 8080
+
+
+def test_process_termination_revalidates_pid_uid_and_confirmation(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    """单进程终止提交前再次核对 PID、UID、启动时间和确认文本。"""
+
+    monkeypatch.setattr(
+        "lab_ops_panel.api.routes.helper_capability",
+        lambda path: {"available": True, "reason": None, "path": str(path)},
+    )
+    monkeypatch.setattr("lab_ops_panel.api.routes.minimum_regular_uid", lambda: 1000)
+    monkeypatch.setattr(
+        "lab_ops_panel.api.routes.process_identity",
+        lambda pid: {"pid": pid, "uid": 2001, "create_time": 1234.5},
+    )
+    task = {"id": "processtask", "state": "queued", "steps": []}
+    calls = []
+    client, headers = _client(tmp_path)
+    with client:
+        client.app.state.process_control.start_process_termination = (
+            lambda pid, uid, created, grace, key: (
+                calls.append((pid, uid, created, grace, key)) or task
+            )
+        )
+        rejected = client.post(
+            "/api/v1/processes/4321/terminate",
+            headers=headers,
+            json={
+                "expected_uid": 2001,
+                "expected_create_time": 1234.5,
+                "confirmation": "错误",
+                "idempotency_key": "process-stop-key-123",
+            },
+        )
+        accepted = client.post(
+            "/api/v1/processes/4321/terminate",
+            headers=headers,
+            json={
+                "expected_uid": 2001,
+                "expected_create_time": 1234.5,
+                "confirmation": "结束进程:4321",
+                "idempotency_key": "process-stop-key-123",
+            },
+        )
+
+    assert rejected.status_code == 400
+    assert accepted.status_code == 202
+    assert calls == [(4321, 2001, 1234.5, 5, "process-stop-key-123")]
+
+
+def test_terminate_all_user_processes_uses_stable_uid(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """按用户结束进程只能针对普通本机账号，并向任务传稳定 UID。"""
+
+    monkeypatch.setattr(
+        "lab_ops_panel.api.routes.helper_capability",
+        lambda path: {"available": True, "reason": None, "path": str(path)},
+    )
+    monkeypatch.setattr("lab_ops_panel.api.routes.minimum_regular_uid", lambda: 1000)
+    monkeypatch.setattr(
+        "lab_ops_panel.api.routes.local_users",
+        lambda: [{"username": "alice", "uid": 2001, "account_source": "local"}],
+    )
+    task = {"id": "uidtask", "state": "queued", "steps": []}
+    calls = []
+    client, headers = _client(tmp_path)
+    with client:
+        client.app.state.process_control.start_uid_termination = lambda username, uid, grace, key: (
+            calls.append((username, uid, grace, key)) or task
+        )
+        response = client.post(
+            "/api/v1/users/alice/processes/terminate",
+            headers=headers,
+            json={
+                "confirmation": "结束全部进程:alice",
+                "idempotency_key": "uid-process-stop-key-123",
+            },
+        )
+
+    assert response.status_code == 202
+    assert calls == [("alice", 2001, 5, "uid-process-stop-key-123")]

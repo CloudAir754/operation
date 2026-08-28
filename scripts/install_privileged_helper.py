@@ -25,6 +25,8 @@ ACTIONS = (
     "port-lookup",
     "process-terminate",
     "uid-processes-terminate",
+    "user-delete-preflight",
+    "user-delete",
 )
 HELPER = Path("/usr/local/libexec/labopspanel-privileged")
 TOOL_DIRECTORY = Path("/usr/local/lib/labopspanel-tools")
@@ -34,7 +36,7 @@ MARKER = "# 由 LabOpsPanel 安装器管理；请勿手工修改"
 
 
 def sudoers_content(username: str, uid: int) -> str:
-    """生成只允许四个固定动作且绑定启动用户的 sudo 规则。"""
+    """生成只允许已登记固定动作且绑定启动用户的 sudo 规则。"""
 
     if not USERNAME.fullmatch(username) or uid <= 0:
         raise ValueError("启动用户名或 UID 无效")

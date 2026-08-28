@@ -18,7 +18,7 @@ def test_sudoers_rule_only_allows_fixed_actions() -> None:
     content = MODULE.sudoers_content("operator", 1000)
 
     assert "operator ALL=(root) NOPASSWD:" in content
-    assert content.count("/usr/local/libexec/labopspanel-privileged") == 9
+    assert content.count("/usr/local/libexec/labopspanel-privileged") == 11
     assert "create-user" in content
     assert "ssh-import" in content
     assert "sudo-grant" in content
@@ -28,6 +28,8 @@ def test_sudoers_rule_only_allows_fixed_actions() -> None:
     assert "port-lookup" in content
     assert "process-terminate" in content
     assert "uid-processes-terminate" in content
+    assert "user-delete-preflight" in content
+    assert "user-delete" in content
     assert " ALL\n" not in content
 
 

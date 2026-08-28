@@ -20,6 +20,10 @@ from lab_ops_panel.infrastructure.processes import (
     terminate_uid_processes,
 )
 from lab_ops_panel.infrastructure.sudo_rules import apply_sudo_grant, revoke_sudo_grant
+from lab_ops_panel.infrastructure.user_deletion import (
+    delete_local_user,
+    user_deletion_preflight,
+)
 
 SYSTEM_COMMANDS = {
     "useradd": Path("/usr/sbin/useradd"),
@@ -165,6 +169,38 @@ def _dispatch(action: str, payload: dict[str, Any]) -> dict[str, Any]:
         if not all(isinstance(value, int | float) for value in (uid, requester_pid, grace_seconds)):
             raise ValueError("用户进程终止参数无效")
         return terminate_uid_processes(int(uid), int(requester_pid), float(grace_seconds))
+    if action == "user-delete-preflight":
+        username = payload.get("username")
+        expected_uid = payload.get("uid")
+        requester_pid = payload.get("requester_pid")
+        if (
+            not isinstance(username, str)
+            or not isinstance(expected_uid, int)
+            or not isinstance(requester_pid, int)
+        ):
+            raise ValueError("用户删除预检参数无效")
+        return user_deletion_preflight(username, expected_uid, requester_pid=requester_pid)
+    if action == "user-delete":
+        username = payload.get("username")
+        expected_uid = payload.get("expected_uid")
+        expected_home = payload.get("expected_home")
+        delete_home = payload.get("delete_home")
+        requester_pid = payload.get("requester_pid")
+        if (
+            not isinstance(username, str)
+            or not isinstance(expected_uid, int)
+            or not isinstance(expected_home, str)
+            or not isinstance(delete_home, bool)
+            or not isinstance(requester_pid, int)
+        ):
+            raise ValueError("用户删除参数无效")
+        return delete_local_user(
+            username,
+            expected_uid,
+            expected_home,
+            delete_home,
+            requester_pid,
+        )
     username = str(payload.get("username", ""))
     account = _local_account(username)
     if account is None:

@@ -1,7 +1,7 @@
 import { CloudServerOutlined, DatabaseOutlined, DesktopOutlined } from '@ant-design/icons'
 import { Alert, Button, Card, Col, Descriptions, Input, Layout, Modal, Progress, Row, Space, Spin, Steps, Table, Tag, Typography } from 'antd'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import { cancelHomeScan, changeSudo, importSshKeys, loadGpu, loadOverview, loadPrivilegedCapability, loadResources, loadStorage, loadTask, loadUsers, readSessionToken, startHomeScan, terminateUserProcesses, watchHomeScan } from './api'
+import { cancelHomeScan, changeSudo, deleteUser, importSshKeys, loadGpu, loadOverview, loadPrivilegedCapability, loadResources, loadStorage, loadTask, loadUsers, readSessionToken, startHomeScan, startUserDeletionPreflight, terminateUserProcesses, watchHomeScan } from './api'
 import type { HomeScanTask, MountPoint, Overview, PersistentTask, PrivilegedCapability, StorageSnapshot, UserAccount } from './types'
 import { filterUsersByUsername } from './userFilters'
 import './styles.css'
@@ -55,6 +55,7 @@ export default function App() {
   const [accessError, setAccessError] = useState('')
   const sessionToken = useRef('')
   const scanController = useRef<AbortController | null>(null)
+  const reloadedDeletionTask = useRef('')
 
   useEffect(() => {
     const token = readSessionToken()
@@ -113,6 +114,14 @@ export default function App() {
       })
     }, 750)
     return () => window.clearInterval(timer)
+  }, [accessTask])
+
+  useEffect(() => {
+    if (accessTask?.kind !== 'user_delete' || accessTask.state !== 'succeeded' || reloadedDeletionTask.current === accessTask.id) return
+    reloadedDeletionTask.current = accessTask.id
+    loadUsers(sessionToken.current).then(setUsers).catch(reason => {
+      setAccessError(reason instanceof Error ? reason.message : '用户已删除，但刷新账号列表失败。')
+    })
   }, [accessTask])
 
   const scanHome = async (username: string) => {
@@ -189,11 +198,55 @@ export default function App() {
     })
   }
 
+  const preflightUserDeletion = async (username: string) => {
+    setAccessError('')
+    try {
+      setAccessTask(await startUserDeletionPreflight(sessionToken.current, username))
+    } catch (reason) {
+      setAccessError(reason instanceof Error ? reason.message : '用户删除预检启动失败。')
+    }
+  }
+
+  const confirmUserDeletion = (username: string, preflightTaskId: string, deleteHome: boolean) => {
+    let confirmation = ''
+    Modal.confirm({
+      title: deleteHome ? `删除 ${username} 及其 home？` : `仅删除账号 ${username}？`,
+      content: <Space direction="vertical" className="full-width"><Alert type="warning" showIcon message={deleteHome ? '账号删除后，home 将先在同一文件系统隔离，再清理。此操作不可恢复。' : '账号将被删除，但 home 数据会原样保留。'} /><Typography.Text>请输入完整用户名 <Typography.Text code>{username}</Typography.Text>：</Typography.Text><Input onChange={event => { confirmation = event.target.value }} /></Space>,
+      okText: deleteHome ? '确认删除账号和 home' : '确认仅删除账号',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        if (confirmation !== username) throw new Error('确认用户名不匹配')
+        try {
+          setAccessError('')
+          setAccessTask(await deleteUser(sessionToken.current, username, preflightTaskId, deleteHome, confirmation))
+        } catch (reason) {
+          setAccessError(reason instanceof Error ? reason.message : '删除用户任务启动失败。')
+          throw reason
+        }
+      },
+    })
+  }
+
   if (error) return <main className="center"><Alert type="error" showIcon message={error} /></main>
   if (!overview) return <main className="center"><Spin size="large" tip="正在读取本机状态" /></main>
 
   const { system, resources, gpu, mounts } = overview
   const filteredUsers = filterUsersByUsername(users, usernameQuery)
+  const deletionPreflightDetail = accessTask?.kind === 'user_delete_preflight' && accessTask.state === 'succeeded'
+    ? accessTask.steps.find(step => step.sequence === 3)?.detail ?? null
+    : null
+  const deletionDependencyDetail = accessTask?.kind === 'user_delete_preflight' && accessTask.state === 'succeeded'
+    ? accessTask.steps.find(step => step.sequence === 2)?.detail ?? null
+    : null
+  const deletionUsername = typeof accessTask?.parameters.username === 'string' ? accessTask.parameters.username : ''
+  const deletionPreflightTaskId = accessTask?.kind === 'user_delete_preflight' ? accessTask.id : ''
+  const deletionBlockers = Array.isArray(deletionPreflightDetail?.blockers) ? deletionPreflightDetail.blockers.filter((item): item is string => typeof item === 'string') : []
+  const homeDeleteBlockers = Array.isArray(deletionPreflightDetail?.home_delete_blockers) ? deletionPreflightDetail.home_delete_blockers.filter((item): item is string => typeof item === 'string') : []
+  const deletionWarnings = Array.isArray(deletionPreflightDetail?.warnings) ? deletionPreflightDetail.warnings.filter((item): item is string => typeof item === 'string') : []
+  const processCount = Array.isArray(deletionDependencyDetail?.processes) ? deletionDependencyDetail.processes.length : 0
+  const sessionCount = Array.isArray(deletionDependencyDetail?.sessions) ? deletionDependencyDetail.sessions.length : 0
+  const diskUsage = deletionPreflightDetail?.disk_usage && typeof deletionPreflightDetail.disk_usage === 'object' ? deletionPreflightDetail.disk_usage as Record<string, unknown> : null
   const gpuUsers = [...new Set(gpu.processes.flatMap(item => item.username ? [item.username] : []))]
   const columns = [
     { title: '挂载点', dataIndex: 'mountpoint', key: 'mountpoint' },
@@ -305,11 +358,23 @@ export default function App() {
                 { title: 'home 文件系统', key: 'home_storage', render: (_, row) => row.home_storage ? <Space wrap><Tag>{row.home_storage.filesystem}</Tag><span>{row.home_storage.mountpoint}</span><span>可用 {bytes(row.home_storage.free)}</span>{row.home_storage.read_only && <Tag color="orange">只读</Tag>}</Space> : 'N/A' },
                 { title: 'sudo 来源', key: 'sudo', render: (_, row) => <Space wrap>{row.sudo_sources.length ? row.sudo_sources.map(source => <Tag key={source} color="gold">{source}</Tag>) : '无'}{!row.sudo_sources_complete && <Tag color="orange">读取受限</Tag>}</Space> },
                 { title: '空间扫描', key: 'scan', fixed: 'right', render: (_, row) => <Button size="small" onClick={() => void scanHome(row.username)} disabled={homeScan?.state === 'queued' || homeScan?.state === 'running'}>扫描 home</Button> },
-                { title: '登录与权限', key: 'access', fixed: 'right', render: (_, row) => <Space><Button size="small" disabled={!privileged?.available} onClick={() => openSshImport(row.username)}>导入 SSH 公钥</Button><Button size="small" danger disabled={!privileged?.available} onClick={() => confirmSudo(row.username, true)}>授予 sudo</Button><Button size="small" disabled={!privileged?.available} onClick={() => confirmSudo(row.username, false)}>撤销托管规则</Button><Button size="small" danger disabled={!privileged?.available} onClick={() => confirmTerminateUserProcesses(row.username)}>结束全部进程</Button></Space> },
+                { title: '登录与权限', key: 'access', fixed: 'right', render: (_, row) => <Space wrap><Button size="small" disabled={!privileged?.available} onClick={() => openSshImport(row.username)}>导入 SSH 公钥</Button><Button size="small" danger disabled={!privileged?.available} onClick={() => confirmSudo(row.username, true)}>授予 sudo</Button><Button size="small" disabled={!privileged?.available} onClick={() => confirmSudo(row.username, false)}>撤销托管规则</Button><Button size="small" danger disabled={!privileged?.available} onClick={() => confirmTerminateUserProcesses(row.username)}>结束全部进程</Button><Button size="small" danger disabled={!privileged?.available} onClick={() => void preflightUserDeletion(row.username)}>删除预检</Button></Space> },
               ]}
             />
             {accessError && <Alert className="notice" type="error" showIcon message={accessError} />}
             {accessTask && <Card className="notice" size="small" title={`访问控制任务 ${accessTask.id}`} extra={<Tag color={accessTask.state === 'succeeded' ? 'green' : accessTask.state === 'failed' ? 'red' : 'blue'}>{accessTask.state}</Tag>}><Steps size="small" items={accessTask.steps.map(step => ({ title: step.name, status: step.state === 'succeeded' ? 'finish' : step.state === 'failed' ? 'error' : step.state === 'running' ? 'process' : 'wait' }))} />{accessTask.error && <Alert type="error" showIcon message={accessTask.error} />}</Card>}
+            {deletionPreflightDetail && deletionDependencyDetail && <Card className="notice" size="small" title={`删除预检：${deletionUsername}`}>
+              <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 4 }} items={[
+                { key: 'processes', label: '进程 / 会话', children: `${processCount} / ${sessionCount}` },
+                { key: 'home', label: '物理 home', children: String(deletionPreflightDetail.resolved_home ?? 'N/A') },
+                { key: 'usage', label: 'home 占用', children: diskUsage && typeof diskUsage.allocated_bytes === 'number' ? `${bytes(diskUsage.allocated_bytes)} / ${Number(diskUsage.inodes ?? 0).toLocaleString()} inode` : 'N/A' },
+                { key: 'delete-home', label: '可自动删除 home', children: deletionPreflightDetail.delete_home_supported === true ? <Tag color="green">可以</Tag> : <Tag color="orange">不可</Tag> },
+              ]} />
+              {deletionWarnings.length > 0 && <Alert className="notice" type="warning" showIcon message="预检警告" description={deletionWarnings.join('；')} />}
+              {deletionBlockers.length > 0 && <Alert className="notice" type="error" showIcon message="存在阻断项，不能删除账号" description={deletionBlockers.join('；')} />}
+              {homeDeleteBlockers.length > 0 && <Alert className="notice" type="warning" showIcon message="home 不能自动删除，但仍可仅删除账号" description={homeDeleteBlockers.join('；')} />}
+              <Space wrap><Button danger disabled={deletionBlockers.length > 0} onClick={() => confirmUserDeletion(deletionUsername, deletionPreflightTaskId, false)}>仅删除账号并保留 home</Button><Button danger type="primary" disabled={deletionBlockers.length > 0 || deletionPreflightDetail.delete_home_supported !== true} onClick={() => confirmUserDeletion(deletionUsername, deletionPreflightTaskId, true)}>删除账号及 home</Button><Typography.Text type="secondary">预检十分钟内有效；执行前会再次检查身份和阻断项。</Typography.Text></Space>
+            </Card>}
           </Card></Col>
           {(homeScan || homeScanError) && <Col span={24}><Card title="home 空间扫描" extra={(homeScan?.state === 'queued' || homeScan?.state === 'running') && <Button danger onClick={() => void stopHomeScan()}>取消</Button>}>
             {homeScanError && <Alert type="error" showIcon message={homeScanError} />}

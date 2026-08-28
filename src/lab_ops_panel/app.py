@@ -16,6 +16,7 @@ from lab_ops_panel.application.account_access import AccountAccessManager
 from lab_ops_panel.application.pam_policy import PamPolicyManager
 from lab_ops_panel.application.process_control import ProcessControlManager
 from lab_ops_panel.application.user_creation import UserCreationManager
+from lab_ops_panel.application.user_deletion import UserDeletionManager
 from lab_ops_panel.config import Settings, ensure_unprivileged
 from lab_ops_panel.database import initialize_database
 from lab_ops_panel.infrastructure.privileged import PrivilegedExecutor
@@ -41,9 +42,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.account_access = AccountAccessManager(app.state.tasks, app.state.privileged)
         app.state.pam_policy = PamPolicyManager(app.state.tasks, app.state.privileged)
         app.state.process_control = ProcessControlManager(app.state.tasks, app.state.privileged)
+        app.state.user_deletion = UserDeletionManager(app.state.tasks, app.state.privileged)
         try:
             yield
         finally:
+            app.state.user_deletion.close()
             app.state.process_control.close()
             app.state.pam_policy.close()
             app.state.account_access.close()

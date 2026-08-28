@@ -136,7 +136,7 @@ def _verified_process(pid: int, expected_uid: int, expected_create_time: float) 
     return process
 
 
-def _requester_tree(requester_pid: int) -> tuple[psutil.Process, set[int]]:
+def requester_context(requester_pid: int) -> tuple[psutil.Process, set[int]]:
     """确认 Web 调用进程是助手祖先，并保护面板及其全部子进程。"""
 
     try:
@@ -167,7 +167,7 @@ def terminate_process(
         raise PermissionError("进程终止只能由受限特权助手执行")
     if not 1 <= grace_seconds <= 30:
         raise ValueError("TERM 等待时间必须在 1 到 30 秒之间")
-    _, protected = _requester_tree(requester_pid)
+    _, protected = requester_context(requester_pid)
     if pid in protected:
         raise ValueError("拒绝终止 LabOpsPanel 进程树")
     process = _verified_process(pid, expected_uid, expected_create_time)
@@ -209,7 +209,7 @@ def terminate_uid_processes(
         raise PermissionError("用户进程终止只能由受限特权助手执行")
     if uid < minimum_regular_uid() or not 1 <= grace_seconds <= 30:
         raise ValueError("只允许终止普通用户的全部进程")
-    requester, protected = _requester_tree(requester_pid)
+    requester, protected = requester_context(requester_pid)
     if requester.uids().real == uid:
         raise ValueError("拒绝终止启动 LabOpsPanel 用户的全部进程")
     terminated: set[int] = set()

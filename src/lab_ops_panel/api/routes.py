@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, Response, UploadFile
@@ -129,6 +130,18 @@ class UidProcessesTerminateRequest(AccountActionRequest):
 
     grace_seconds: int = Field(default=5, ge=1, le=30)
     confirmation: str = Field(max_length=100)
+
+
+class UserDeletePreflightRequest(AccountActionRequest):
+    """启动用户删除只读预检的参数。"""
+
+
+class UserDeleteRequest(AccountActionRequest):
+    """引用近期成功预检的不可逆用户删除参数。"""
+
+    preflight_task_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    delete_home: bool = False
+    confirmation: str = Field(min_length=1, max_length=32)
 
 
 class SshKeyPreviewRequest(BaseModel):
@@ -437,6 +450,91 @@ def terminate_all_user_processes(
     try:
         return http_request.app.state.process_control.start_uid_termination(
             username, uid, request.grace_seconds, request.idempotency_key
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/users/{username}/deletion-preflight", status_code=202)
+def start_user_deletion_preflight(
+    username: str, request: UserDeletePreflightRequest, http_request: Request
+) -> dict[str, Any]:
+    """启动包含磁盘统计的用户删除后台预检。"""
+
+    _require_privileged_helper(http_request)
+    account = _interactive_local_account(username)
+    uid = int(account["uid"])
+    if uid == os.getuid():
+        raise HTTPException(status_code=403, detail="拒绝删除启动 LabOpsPanel 的用户")
+    try:
+        return http_request.app.state.user_deletion.start_preflight(
+            username, uid, str(account["home"]), request.idempotency_key
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _validated_delete_preflight(
+    request: Request,
+    task_id: str,
+    username: str,
+    uid: int,
+    home: str,
+    delete_home: bool,
+) -> dict[str, Any]:
+    """要求十分钟内成功且身份参数完全匹配的删除预检。"""
+
+    try:
+        task = request.app.state.tasks.get(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="删除预检任务不存在") from exc
+    if (
+        task["kind"] != "user_delete_preflight"
+        or task["state"] != "succeeded"
+        or task["parameters"] != {"username": username, "uid": uid, "home": home}
+    ):
+        raise HTTPException(status_code=409, detail="删除预检未成功或账号身份已变化")
+    created_at = datetime.fromisoformat(task["created_at"])
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    if datetime.now(UTC) - created_at > timedelta(minutes=10):
+        raise HTTPException(status_code=409, detail="删除预检已超过十分钟，请重新执行")
+    detail = task["steps"][2]["detail"] or {}
+    if detail.get("blockers"):
+        raise HTTPException(status_code=409, detail="删除预检仍有阻断项")
+    if delete_home and not detail.get("delete_home_supported"):
+        raise HTTPException(status_code=409, detail="当前 home 不能安全自动删除")
+    return task
+
+
+@router.post("/users/{username}/delete", status_code=202)
+def delete_user(username: str, request: UserDeleteRequest, http_request: Request) -> dict[str, Any]:
+    """输入用户名二次确认后启动仅删账号或账号加 home 的任务。"""
+
+    _require_privileged_helper(http_request)
+    if request.confirmation != username:
+        raise HTTPException(status_code=400, detail="删除确认必须完整输入用户名")
+    account = _interactive_local_account(username)
+    uid = int(account["uid"])
+    home = str(account["home"])
+    if uid == os.getuid():
+        raise HTTPException(status_code=403, detail="拒绝删除启动 LabOpsPanel 的用户")
+    _validated_delete_preflight(
+        http_request,
+        request.preflight_task_id,
+        username,
+        uid,
+        home,
+        request.delete_home,
+    )
+    try:
+        return http_request.app.state.user_deletion.start_delete(
+            username,
+            uid,
+            home,
+            request.delete_home,
+            request.preflight_task_id,
+            request.idempotency_key,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

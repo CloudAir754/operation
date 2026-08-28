@@ -297,6 +297,7 @@ export interface PersistentTask {
   kind: string
   state: 'queued' | 'prechecking' | 'waiting_confirmation' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted' | 'rollback_pending' | 'rolled_back'
   target: string
+  parameters: Record<string, unknown>
   error: string | null
   steps: Array<{
     sequence: number

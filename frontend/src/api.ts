@@ -336,3 +336,37 @@ export async function terminateUserProcesses(
   if (!response.ok) throw new Error(await errorDetail(response, '结束用户全部进程任务启动失败。'))
   return response.json() as Promise<PersistentTask>
 }
+
+export async function startUserDeletionPreflight(
+  token: string,
+  username: string,
+): Promise<PersistentTask> {
+  const response = await fetch(`/api/v1/users/${encodeURIComponent(username)}/deletion-preflight`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({ idempotency_key: crypto.randomUUID() }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '用户删除预检启动失败。'))
+  return response.json() as Promise<PersistentTask>
+}
+
+export async function deleteUser(
+  token: string,
+  username: string,
+  preflightTaskId: string,
+  deleteHome: boolean,
+  confirmation: string,
+): Promise<PersistentTask> {
+  const response = await fetch(`/api/v1/users/${encodeURIComponent(username)}/delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({
+      preflight_task_id: preflightTaskId,
+      delete_home: deleteHome,
+      confirmation,
+      idempotency_key: crypto.randomUUID(),
+    }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '删除用户任务启动失败。'))
+  return response.json() as Promise<PersistentTask>
+}

@@ -454,3 +454,84 @@ def test_terminate_all_user_processes_uses_stable_uid(tmp_path: Path, monkeypatc
 
     assert response.status_code == 202
     assert calls == [("alice", 2001, 5, "uid-process-stop-key-123")]
+
+
+def test_user_delete_requires_successful_matching_preflight_and_username_confirmation(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    """用户删除必须引用近期成功预检，并完整输入用户名二次确认。"""
+
+    monkeypatch.setattr(
+        "lab_ops_panel.api.routes.helper_capability",
+        lambda path: {"available": True, "reason": None, "path": str(path)},
+    )
+    monkeypatch.setattr("lab_ops_panel.api.routes.minimum_regular_uid", lambda: 1000)
+    monkeypatch.setattr(
+        "lab_ops_panel.api.routes.local_users",
+        lambda: [
+            {
+                "username": "alice",
+                "uid": 2001,
+                "account_source": "local",
+                "home": "/home/alice",
+            }
+        ],
+    )
+    response_task = {"id": "deletetask", "state": "queued", "steps": []}
+    calls = []
+    client, headers = _client(tmp_path)
+    with client:
+        preflight = client.app.state.tasks.create_or_get(
+            "user_delete_preflight",
+            "delete-preflight-key-123",
+            {"username": "alice", "uid": 2001, "home": "/home/alice"},
+            "UID:2001",
+            ["账号", "依赖", "home"],
+        )
+        client.app.state.tasks.transition(preflight["id"], "prechecking")
+        client.app.state.tasks.transition(preflight["id"], "running")
+        client.app.state.tasks.update_step(
+            preflight["id"],
+            3,
+            "succeeded",
+            {"blockers": [], "delete_home_supported": True},
+        )
+        client.app.state.tasks.transition(preflight["id"], "succeeded")
+        client.app.state.user_deletion.start_delete = (
+            lambda username, uid, home, delete_home, preflight_id, key: (
+                calls.append((username, uid, home, delete_home, preflight_id, key)) or response_task
+            )
+        )
+        rejected = client.post(
+            "/api/v1/users/alice/delete",
+            headers=headers,
+            json={
+                "preflight_task_id": preflight["id"],
+                "delete_home": True,
+                "confirmation": "Alice",
+                "idempotency_key": "delete-user-key-123",
+            },
+        )
+        accepted = client.post(
+            "/api/v1/users/alice/delete",
+            headers=headers,
+            json={
+                "preflight_task_id": preflight["id"],
+                "delete_home": True,
+                "confirmation": "alice",
+                "idempotency_key": "delete-user-key-123",
+            },
+        )
+
+    assert rejected.status_code == 400
+    assert accepted.status_code == 202
+    assert calls == [
+        (
+            "alice",
+            2001,
+            "/home/alice",
+            True,
+            preflight["id"],
+            "delete-user-key-123",
+        )
+    ]

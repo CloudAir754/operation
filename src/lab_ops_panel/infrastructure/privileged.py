@@ -22,8 +22,15 @@ ALLOWED_ACTIONS = frozenset(
         "port-lookup",
         "process-terminate",
         "uid-processes-terminate",
+        "user-delete-preflight",
+        "user-delete",
     }
 )
+ACTION_TIMEOUTS = {
+    # home 占用统计和同文件系统递归清理可能明显超过普通账号动作。
+    "user-delete-preflight": 600,
+    "user-delete": 3600,
+}
 
 
 def helper_capability(path: Path = DEFAULT_HELPER) -> dict[str, Any]:
@@ -67,7 +74,12 @@ class PrivilegedExecutor:
         if not capability["available"]:
             raise RuntimeError(str(capability["reason"]))
         request_payload = dict(payload)
-        if action in {"process-terminate", "uid-processes-terminate"}:
+        if action in {
+            "process-terminate",
+            "uid-processes-terminate",
+            "user-delete-preflight",
+            "user-delete",
+        }:
             request_payload["requester_pid"] = os.getpid()
         encoded = json.dumps(request_payload, ensure_ascii=False, separators=(",", ":"))
         if len(encoded.encode()) > 1_000_000:
@@ -79,7 +91,7 @@ class PrivilegedExecutor:
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=120,
+                timeout=ACTION_TIMEOUTS.get(action, 120),
                 env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8"},
             )
         except (subprocess.SubprocessError, OSError) as exc:

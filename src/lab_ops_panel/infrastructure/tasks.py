@@ -19,12 +19,12 @@ SENSITIVE_KEYS = frozenset(
     {"password", "private_key", "credential", "credentials", "secret", "token", "content"}
 )
 TASK_TRANSITIONS = {
-    "queued": frozenset({"prechecking", "cancelled"}),
-    "prechecking": frozenset({"waiting_confirmation", "running", "failed"}),
-    "waiting_confirmation": frozenset({"running", "cancelled", "failed"}),
+    "queued": frozenset({"prechecking", "cancelled", "interrupted"}),
+    "prechecking": frozenset({"waiting_confirmation", "running", "failed", "interrupted"}),
+    "waiting_confirmation": frozenset({"running", "cancelled", "failed", "interrupted"}),
     "running": frozenset({"succeeded", "failed", "rollback_pending", "interrupted"}),
     "interrupted": frozenset({"running", "rollback_pending", "failed"}),
-    "rollback_pending": frozenset({"rolled_back", "failed"}),
+    "rollback_pending": frozenset({"rolled_back", "failed", "interrupted"}),
     "succeeded": frozenset(),
     "failed": frozenset(),
     "cancelled": frozenset(),
@@ -173,14 +173,23 @@ class TaskRepository:
             return self._public(session, task)
 
     def mark_running_interrupted(self) -> int:
-        """启动时把上次异常退出的运行中任务标为 interrupted。"""
+        """启动时把所有未落入终态的旧任务标为 interrupted。"""
 
         with Session(self.engine) as session:
-            tasks = list(session.scalars(select(TaskRecord).where(TaskRecord.state == "running")))
+            active_states = {
+                "queued",
+                "prechecking",
+                "waiting_confirmation",
+                "running",
+                "rollback_pending",
+            }
+            tasks = list(
+                session.scalars(select(TaskRecord).where(TaskRecord.state.in_(active_states)))
+            )
             now = datetime.now(UTC)
             for task in tasks:
                 task.state = "interrupted"
-                task.error = "上次运行异常中断，需要管理员选择继续或回滚"
+                task.error = "上次运行异常中断，请重新预检并核对系统实际状态"
                 task.updated_at = now
                 for step in session.scalars(
                     select(TaskStepRecord).where(

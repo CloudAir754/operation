@@ -83,3 +83,20 @@ def test_running_task_is_marked_interrupted_after_restart(tmp_path: Path) -> Non
     recovered = repository.get(task["id"])
     assert recovered["state"] == "interrupted"
     assert recovered["steps"][0]["state"] == "interrupted"
+
+
+def test_queued_and_prechecking_tasks_are_also_interrupted_after_restart(
+    tmp_path: Path,
+) -> None:
+    """任务可能在工作线程落库前退出，queued/prechecking 也不能永久悬挂。"""
+
+    repository = _repository(tmp_path)
+    queued = repository.create_or_get("test", "queued-key-123", {}, "queued", ["步骤"])
+    prechecking = repository.create_or_get(
+        "test", "prechecking-key-123", {}, "prechecking", ["步骤"]
+    )
+    repository.transition(prechecking["id"], "prechecking")
+
+    assert repository.mark_running_interrupted() == 2
+    assert repository.get(queued["id"])["state"] == "interrupted"
+    assert repository.get(prechecking["id"])["state"] == "interrupted"

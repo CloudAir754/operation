@@ -62,7 +62,7 @@ def test_terminate_process_checks_identity_then_uses_term(monkeypatch) -> None: 
         identity = processes.process_identity(child.pid)
         monkeypatch.setattr(
             processes,
-            "_requester_tree",
+            "requester_context",
             lambda requester_pid: (psutil.Process(os.getpid()), {os.getpid()}),
         )
         result = processes.terminate_process(
@@ -88,7 +88,7 @@ def test_terminate_process_rejects_pid_reuse_and_panel_tree(monkeypatch) -> None
         identity = processes.process_identity(child.pid)
         monkeypatch.setattr(
             processes,
-            "_requester_tree",
+            "requester_context",
             lambda requester_pid: (psutil.Process(os.getpid()), {os.getpid()}),
         )
         with pytest.raises(ValueError, match="已变化"):
@@ -101,7 +101,7 @@ def test_terminate_process_rejects_pid_reuse_and_panel_tree(monkeypatch) -> None
             )
         monkeypatch.setattr(
             processes,
-            "_requester_tree",
+            "requester_context",
             lambda requester_pid: (psutil.Process(os.getpid()), {os.getpid(), child.pid}),
         )
         with pytest.raises(ValueError, match="LabOpsPanel"):
@@ -135,7 +135,7 @@ def test_terminate_uid_processes_repeats_scan_until_empty(monkeypatch) -> None: 
 
     try:
         monkeypatch.setattr(
-            processes, "_requester_tree", lambda requester_pid: (Requester(), {os.getpid()})
+            processes, "requester_context", lambda requester_pid: (Requester(), {os.getpid()})
         )
         monkeypatch.setattr(processes, "_uid_processes", targets)
         monkeypatch.setattr(processes, "minimum_regular_uid", lambda: 1)

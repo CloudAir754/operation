@@ -8,6 +8,7 @@ import platform
 import pwd
 import shutil
 import socket
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -160,7 +161,25 @@ def _home_storage(path: Path) -> dict[str, Any] | None:
     }
 
 
-def local_users(passwd_path: Path = Path("/etc/passwd")) -> list[dict[str, Any]]:
+def _nss_passwd_lines() -> list[str]:
+    """以固定命令和超时读取 NSS 账号，目录服务异常时安全降级。"""
+
+    try:
+        completed = subprocess.run(
+            ["getent", "passwd"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return []
+    return completed.stdout.splitlines()
+
+
+def local_users(
+    passwd_path: Path = Path("/etc/passwd"), nss_lines: list[str] | None = None
+) -> list[dict[str, Any]]:
     """从本机 passwd 文件读取账号并基于 UID/GID 返回稳定关联信息。"""
 
     sudo_members = _sudo_group_members()
@@ -169,7 +188,13 @@ def local_users(passwd_path: Path = Path("/etc/passwd")) -> list[dict[str, Any]]
         passwd_lines = passwd_path.read_text(encoding="utf-8").splitlines()
     except OSError:
         return users
-    for line in passwd_lines:
+    local_names = {fields[0] for line in passwd_lines if len(fields := line.split(":")) == 7}
+    if nss_lines is None and passwd_path == Path("/etc/passwd"):
+        nss_lines = _nss_passwd_lines()
+    merged_lines = passwd_lines + [
+        line for line in (nss_lines or []) if line.split(":", 1)[0] not in local_names
+    ]
+    for line in merged_lines:
         fields = line.split(":")
         if len(fields) != 7:
             continue
@@ -189,7 +214,7 @@ def local_users(passwd_path: Path = Path("/etc/passwd")) -> list[dict[str, Any]]
                 "home": home,
                 "resolved_home": str(Path(home).resolve(strict=False)),
                 "shell": shell,
-                "account_source": "local",
+                "account_source": "local" if username in local_names else "NSS 目录服务",
                 "account_status": "N/A",
                 "home_storage": _home_storage(Path(home)),
                 "sudo_sources": [],

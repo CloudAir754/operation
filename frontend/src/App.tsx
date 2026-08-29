@@ -1,7 +1,7 @@
-import { CloudServerOutlined, DatabaseOutlined, DesktopOutlined } from '@ant-design/icons'
-import { Alert, Button, Card, Col, Descriptions, Input, Layout, Modal, Progress, Row, Space, Spin, Steps, Table, Tag, Typography } from 'antd'
+import { CloudServerOutlined, DatabaseOutlined, DesktopOutlined, UploadOutlined } from '@ant-design/icons'
+import { Alert, Button, Card, Col, Descriptions, Input, Layout, Modal, Progress, Row, Space, Spin, Steps, Table, Tag, Typography, Upload } from 'antd'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import { cancelHomeScan, changeSudo, deleteUser, importSshKeys, loadGpu, loadOverview, loadPrivilegedCapability, loadResources, loadStorage, loadTask, loadUsers, readSessionToken, startHomeScan, startUserDeletionPreflight, terminateUserProcesses, watchHomeScan } from './api'
+import { cancelHomeScan, changeSudo, deleteUser, importSshKeys, loadGpu, loadOverview, loadPrivilegedCapability, loadResources, loadStorage, loadTask, loadUsers, previewSshKeys, readSessionToken, startHomeScan, startUserDeletionPreflight, terminateUserProcesses, watchHomeScan } from './api'
 import type { HomeScanTask, MountPoint, Overview, PersistentTask, PrivilegedCapability, StorageSnapshot, UserAccount } from './types'
 import { filterUsersByUsername } from './userFilters'
 import './styles.css'
@@ -14,6 +14,8 @@ const FileTransferPanel = lazy(() => import('./FileTransferPanel'))
 const HomeMigrationPanel = lazy(() => import('./HomeMigrationPanel'))
 const DiskInitializationPanel = lazy(() => import('./DiskInitializationPanel'))
 const UserStorageScanPanel = lazy(() => import('./UserStorageScanPanel'))
+const TaskPanel = lazy(() => import('./TaskPanel'))
+const SettingsPanel = lazy(() => import('./SettingsPanel'))
 
 function bytes(value: number | null): string {
   if (value === null) return 'N/A'
@@ -155,14 +157,36 @@ export default function App() {
   const openSshImport = (username: string) => {
     let keys = ''
     Modal.confirm({
-      title: `向 ${username} 导入 SSH 公钥`,
-      content: <Input.TextArea rows={7} placeholder="每行一条 OpenSSH 公钥；不接受私钥或 authorized_keys 选项" onChange={event => { keys = event.target.value }} />,
-      okText: '校验并导入',
+      title: `校验 ${username} 的 SSH 公钥`,
+      content: <Space direction="vertical" className="full-width"><Upload accept=".pub,text/plain" maxCount={1} beforeUpload={async file => { if (file.size > 100_000) { keys = ''; setAccessError('SSH 公钥文件不能超过 100 KB。'); return Upload.LIST_IGNORE } keys = await file.text(); return false }}><Button icon={<UploadOutlined />}>读取 .pub 或文本文件</Button></Upload><Input.TextArea rows={7} placeholder="也可直接粘贴；每行一条 OpenSSH 公钥，不接受私钥或 authorized_keys 选项" onChange={event => { keys = event.target.value }} /></Space>,
+      okText: '校验并预览指纹',
       cancelText: '取消',
       onOk: async () => {
         if (!keys.trim()) throw new Error('请粘贴至少一条公钥')
         setAccessError('')
-        setAccessTask(await importSshKeys(sessionToken.current, username, keys))
+        let preview: Awaited<ReturnType<typeof previewSshKeys>>
+        try {
+          preview = await previewSshKeys(sessionToken.current, keys)
+        } catch (reason) {
+          setAccessError(reason instanceof Error ? reason.message : 'SSH 公钥预览失败。')
+          throw reason
+        }
+        Modal.confirm({
+          title: `确认向 ${username} 导入公钥？`,
+          width: 760,
+          content: <Space direction="vertical" className="full-width">{preview.rows.map(row => <Alert key={row.source_row} type={row.status === 'invalid' ? 'error' : row.status === 'duplicate' ? 'warning' : 'success'} showIcon message={`第 ${row.source_row} 行 · ${row.key_type ?? '无效类型'} · ${row.status}`} description={row.fingerprint ?? row.error ?? 'N/A'} />)}<Typography.Text type="secondary">只展示类型、状态和 SHA256 指纹，不回显完整公钥。</Typography.Text></Space>,
+          okText: '确认原子导入',
+          okButtonProps: { disabled: preview.counts.valid === 0 || preview.counts.invalid > 0 },
+          cancelText: '返回',
+          onOk: async () => {
+            try {
+              setAccessTask(await importSshKeys(sessionToken.current, username, keys))
+            } catch (reason) {
+              setAccessError(reason instanceof Error ? reason.message : 'SSH 公钥导入失败。')
+              throw reason
+            }
+          },
+        })
       },
     })
   }
@@ -252,6 +276,7 @@ export default function App() {
   const sessionCount = Array.isArray(deletionDependencyDetail?.sessions) ? deletionDependencyDetail.sessions.length : 0
   const diskUsage = deletionPreflightDetail?.disk_usage && typeof deletionPreflightDetail.disk_usage === 'object' ? deletionPreflightDetail.disk_usage as Record<string, unknown> : null
   const gpuUsers = [...new Set(gpu.processes.flatMap(item => item.username ? [item.username] : []))]
+  const gpuIndexes = [...new Set(gpu.processes.map(item => item.gpu_index))]
   const columns = [
     { title: '挂载点', dataIndex: 'mountpoint', key: 'mountpoint' },
     { title: '文件系统', dataIndex: 'filesystem', key: 'filesystem' },
@@ -264,10 +289,11 @@ export default function App() {
 
   return (
     <Layout className="page">
-      <Header className="header"><Space><DesktopOutlined /><Typography.Title level={3}>LabOpsPanel</Typography.Title><Tag color="blue">阶段 3</Tag></Space></Header>
+      <Header className="header"><Space><DesktopOutlined /><Typography.Title level={3}>LabOpsPanel</Typography.Title><Tag color="blue">阶段 1–4</Tag></Space></Header>
       <Content className="content">
         <Alert className="notice" type={privileged?.available ? 'warning' : 'info'} showIcon message={privileged?.available ? '账号、文件、ext4 home 迁移和空盘 GPT + ext4 初始化写操作已启用；所有破坏性步骤仍需预检与明确确认。' : '当前仅开放只读功能；系统写操作需要管理员另行安装可信特权助手。'} />
         <Row gutter={[16, 16]}>
+          <Col span={24}><Suspense fallback={<Spin tip="正在加载任务" />}><TaskPanel token={sessionToken.current} /></Suspense></Col>
           <Col xs={24} lg={12}><Card title={<Space><CloudServerOutlined />本机信息</Space>}>
             <Descriptions column={1} size="small" items={[
               { key: 'host', label: '主机名', children: system.hostname },
@@ -282,13 +308,14 @@ export default function App() {
           <Col xs={24} sm={12} lg={6}><Card title="CPU" extra={<Tag color="green">每 2 秒刷新</Tag>}>
             <Progress type="dashboard" percent={Math.round(resources.cpu.total_percent)} />
             <p>{resources.cpu.physical_cores ?? 'N/A'} 物理核 / {resources.cpu.logical_cores} 逻辑核</p>
+            <p>负载 {resources.cpu.load_average.map(value => value.toFixed(2)).join(' / ')}</p>
             <Typography.Text type="secondary">{resources.cpu.model}</Typography.Text>
             <Sparkline values={resourceHistory.map(item => item.cpu)} color="#1677ff" />
           </Card></Col>
           <Col xs={24} sm={12} lg={6}><Card title="内存" extra={resourceUpdatedAt ? `更新于 ${resourceUpdatedAt.toLocaleTimeString()}` : null}>
             <Progress type="dashboard" percent={Math.round(resources.memory.percent)} />
             <p>{bytes(resources.memory.used)} / {bytes(resources.memory.total)}</p>
-            <Typography.Text type="secondary">可用 {bytes(resources.memory.available)} · Swap {bytes(resources.memory.swap_used)} / {bytes(resources.memory.swap_total)}</Typography.Text>
+            <Typography.Text type="secondary">可用 {bytes(resources.memory.available)} · 缓存 {bytes(resources.memory.cached)} · Swap {bytes(resources.memory.swap_used)} / {bytes(resources.memory.swap_total)}</Typography.Text>
             <Sparkline values={resourceHistory.map(item => item.memory)} color="#13a8a8" />
           </Card></Col>
           <Col span={24}><Card title="按核 CPU 利用率"><Space wrap>{resources.cpu.per_core_percent.map((value, index) => <Tag key={index} color={value >= 90 ? 'red' : value >= 70 ? 'orange' : 'blue'}>CPU {index}: {Math.round(value)}%</Tag>)}</Space></Card></Col>
@@ -300,17 +327,19 @@ export default function App() {
               <p>温度 {device.temperature_celsius ?? 'N/A'} °C · 风扇 {device.fan_percent ?? 'N/A'}% · 功耗 {device.power_watts?.toFixed(1) ?? 'N/A'} W</p>
               <p>PCIe RX {rate(device.pcie_rx_bytes_per_second)} · TX {rate(device.pcie_tx_bytes_per_second)}</p>
               <p>DRAM 带宽 {device.dram_bandwidth_percent === null ? 'N/A' : `${device.dram_bandwidth_percent}%`}</p>
-              <Typography.Text type="secondary">{device.uuid} · {device.pci_bus_id}</Typography.Text>
+              <p>时钟 图形 {device.graphics_clock_mhz ?? 'N/A'} / SM {device.sm_clock_mhz ?? 'N/A'} / 显存 {device.memory_clock_mhz ?? 'N/A'} MHz</p>
+              <Typography.Text type="secondary">驱动 {device.driver_version} · {device.uuid} · {device.pci_bus_id}</Typography.Text>
             </Card>)}</Space> : <Alert type="warning" showIcon message="N/A" description={`未检测到可用的 NVIDIA GPU 或 NVML 驱动（${gpu.reason ?? '未知原因'}），其他功能不受影响。`} />}
           </Card></Col>
           {gpu.available && <Col span={24}><Card title="GPU 进程"><Table rowKey={row => `${row.gpu_uuid}:${row.pid}`} size="small" dataSource={gpu.processes} pagination={{ pageSize: 10 }} scroll={{ x: 1100 }} columns={[
-            { title: 'GPU', dataIndex: 'gpu_index', key: 'gpu_index', sorter: (left, right) => left.gpu_index - right.gpu_index },
+            { title: 'GPU', dataIndex: 'gpu_index', key: 'gpu_index', filters: gpuIndexes.map(value => ({ text: `GPU ${value}`, value })), onFilter: (value, row) => row.gpu_index === value, sorter: (left, right) => left.gpu_index - right.gpu_index },
             { title: 'PID', dataIndex: 'pid', key: 'pid' },
             { title: '用户', dataIndex: 'username', key: 'username', filters: gpuUsers.map(value => ({ text: value, value })), onFilter: (value, row) => row.username === value },
             { title: '类型', key: 'types', render: (_, row) => row.types.join(' + ') },
             { title: '显存', key: 'memory', render: (_, row) => row.memory_used === null ? 'N/A' : `${bytes(row.memory_used)} (${row.memory_percent?.toFixed(1)}%)`, sorter: (left, right) => (left.memory_used ?? -1) - (right.memory_used ?? -1) },
-            { title: 'SM', key: 'sm', render: (_, row) => row.sm_percent === null ? 'N/A' : `${row.sm_percent}%` },
+            { title: 'SM', key: 'sm', render: (_, row) => row.sm_percent === null ? 'N/A' : `${row.sm_percent}%`, sorter: (left, right) => (left.sm_percent ?? -1) - (right.sm_percent ?? -1) },
             { title: '显存活跃', key: 'memory_activity', render: (_, row) => row.memory_activity_percent === null ? 'N/A' : `${row.memory_activity_percent}%` },
+            { title: '编码 / 解码', key: 'codec', render: (_, row) => `${row.encoder_percent === null ? 'N/A' : `${row.encoder_percent}%`} / ${row.decoder_percent === null ? 'N/A' : `${row.decoder_percent}%`}` },
             { title: '采样窗口', key: 'sample_period', render: (_, row) => row.sample_period_seconds === null ? 'N/A' : `${row.sample_period_seconds} 秒` },
             { title: '进程带宽', dataIndex: 'bandwidth', key: 'bandwidth', render: () => 'N/A' },
             { title: '命令', dataIndex: 'command', key: 'command', ellipsis: true, render: value => value ?? '进程已退出' },
@@ -325,6 +354,7 @@ export default function App() {
               { title: '文件系统', dataIndex: 'filesystem', key: 'filesystem', render: value => value ?? 'N/A' },
               { title: '挂载点', key: 'mountpoints', render: (_, row) => row.mountpoints.join('、') || '未挂载' },
               { title: '稳定身份', dataIndex: 'stable_identity', key: 'stable_identity', ellipsis: true, render: value => value ?? <Tag color="red">缺失</Tag> },
+              { title: '健康提示', key: 'health', render: (_, row) => row.read_only ? <Tag color="orange">只读</Tag> : row.removable ? <Tag color="blue">可移除设备</Tag> : row.stable_identity ? <Tag color="green">身份可稳定识别</Tag> : <Tag color="red">缺少稳定身份</Tag> },
               { title: '只读', key: 'read_only', render: (_, row) => row.read_only ? '是' : '否' },
             ]} /> : <Alert type="warning" showIcon message="块设备信息不可用" description={storage?.error ?? '尚未读取'} />}
           </Card></Col>
@@ -339,6 +369,7 @@ export default function App() {
           <Col span={24}><Card title="网络"><Table rowKey="name" size="small" dataSource={resources.networks} pagination={{ pageSize: 8 }} scroll={{ x: 900 }} columns={[
             { title: '接口', dataIndex: 'name', key: 'name' },
             { title: '状态', key: 'state', render: (_, row) => <Tag color={row.is_up ? 'green' : 'default'}>{row.is_up ? '已连接' : '未连接'}</Tag> },
+            { title: '链路速率', key: 'speed', render: (_, row) => row.speed_mbps === null ? 'N/A' : `${row.speed_mbps} Mbps` },
             { title: '地址', key: 'addresses', render: (_, row) => row.addresses.join('、') || 'N/A' },
             { title: '接收', key: 'received', render: (_, row) => rate(row.received_bytes_per_second) },
             { title: '发送', key: 'sent', render: (_, row) => rate(row.sent_bytes_per_second) },
@@ -359,10 +390,11 @@ export default function App() {
                 { title: '物理 home', dataIndex: 'resolved_home', key: 'resolved_home' },
                 { title: 'Shell', dataIndex: 'shell', key: 'shell' },
                 { title: '账号来源', dataIndex: 'account_source', key: 'account_source' },
+                { title: '账号状态', dataIndex: 'account_status', key: 'account_status' },
                 { title: 'home 文件系统', key: 'home_storage', render: (_, row) => row.home_storage ? <Space wrap><Tag>{row.home_storage.filesystem}</Tag><span>{row.home_storage.mountpoint}</span><span>可用 {bytes(row.home_storage.free)}</span>{row.home_storage.read_only && <Tag color="orange">只读</Tag>}</Space> : 'N/A' },
                 { title: 'sudo 来源', key: 'sudo', render: (_, row) => <Space wrap>{row.sudo_sources.length ? row.sudo_sources.map(source => <Tag key={source} color="gold">{source}</Tag>) : '无'}{!row.sudo_sources_complete && <Tag color="orange">读取受限</Tag>}</Space> },
-                { title: '空间扫描', key: 'scan', fixed: 'right', render: (_, row) => <Button size="small" onClick={() => void scanHome(row.username)} disabled={homeScan?.state === 'queued' || homeScan?.state === 'running'}>扫描 home</Button> },
-                { title: '登录与权限', key: 'access', fixed: 'right', render: (_, row) => <Space wrap><Button size="small" disabled={!privileged?.available} onClick={() => openSshImport(row.username)}>导入 SSH 公钥</Button><Button size="small" danger disabled={!privileged?.available} onClick={() => confirmSudo(row.username, true)}>授予 sudo</Button><Button size="small" disabled={!privileged?.available} onClick={() => confirmSudo(row.username, false)}>撤销托管规则</Button><Button size="small" danger disabled={!privileged?.available} onClick={() => confirmTerminateUserProcesses(row.username)}>结束全部进程</Button><Button size="small" danger disabled={!privileged?.available} onClick={() => void preflightUserDeletion(row.username)}>删除预检</Button></Space> },
+                { title: '空间扫描', key: 'scan', fixed: 'right', render: (_, row) => <Button size="small" onClick={() => void scanHome(row.username)} disabled={row.account_source !== 'local' || homeScan?.state === 'queued' || homeScan?.state === 'running'}>扫描 home</Button> },
+                { title: '登录与权限', key: 'access', fixed: 'right', render: (_, row) => <Space wrap><Button size="small" disabled={!privileged?.available || row.account_source !== 'local'} onClick={() => openSshImport(row.username)}>导入 SSH 公钥</Button><Button size="small" danger disabled={!privileged?.available || row.account_source !== 'local'} onClick={() => confirmSudo(row.username, true)}>授予 sudo</Button><Button size="small" disabled={!privileged?.available || row.account_source !== 'local'} onClick={() => confirmSudo(row.username, false)}>撤销托管规则</Button><Button size="small" danger disabled={!privileged?.available || row.account_source !== 'local'} onClick={() => confirmTerminateUserProcesses(row.username)}>结束全部进程</Button><Button size="small" danger disabled={!privileged?.available || row.account_source !== 'local'} onClick={() => void preflightUserDeletion(row.username)}>删除预检</Button></Space> },
               ]}
             />
             {accessError && <Alert className="notice" type="error" showIcon message={accessError} />}
@@ -398,6 +430,7 @@ export default function App() {
           <Col span={24}><Suspense fallback={<Spin tip="正在加载 home 迁移工具" />}><HomeMigrationPanel token={sessionToken.current} privileged={Boolean(privileged?.available)} users={users} /></Suspense></Col>
           <Col span={24}><Suspense fallback={<Spin tip="正在加载磁盘初始化工具" />}><DiskInitializationPanel token={sessionToken.current} privileged={Boolean(privileged?.available)} devices={storage?.devices ?? []} /></Suspense></Col>
           <Col span={24}><Suspense fallback={<Spin tip="正在加载账号导入工具" />}><UserImportPanel token={sessionToken.current} /></Suspense></Col>
+          <Col span={24}><Suspense fallback={<Spin tip="正在加载设置" />}><SettingsPanel token={sessionToken.current} /></Suspense></Col>
         </Row>
       </Content>
     </Layout>

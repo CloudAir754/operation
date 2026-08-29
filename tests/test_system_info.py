@@ -41,3 +41,22 @@ def test_directory_account_sources_exclude_local_backends(tmp_path: Path) -> Non
     nsswitch.write_text("passwd: files systemd sss\ngroup: files systemd sss\n", encoding="utf-8")
 
     assert _directory_account_sources(nsswitch) == ["sss"]
+
+
+def test_directory_accounts_are_read_only_listed_from_nss(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """NSS 返回的非本机账号应展示来源，供 Web 层拒绝写操作。"""
+
+    passwd_path = tmp_path / "passwd"
+    passwd_path.write_text("alice:x:1000:1000:Alice:/home/alice:/bin/bash\n", encoding="utf-8")
+    monkeypatch.setattr("lab_ops_panel.infrastructure.system_info._sudo_group_members", set)
+
+    users = local_users(
+        passwd_path,
+        [
+            "alice:x:1000:1000:Alice:/home/alice:/bin/bash",
+            "remote:x:2000:2000:Remote:/home/remote:/bin/bash",
+        ],
+    )
+
+    assert [user["username"] for user in users] == ["alice", "remote"]
+    assert users[1]["account_source"] == "NSS 目录服务"

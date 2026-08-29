@@ -25,7 +25,7 @@ def _available_port(host: str) -> int:
 def main() -> None:
     """验证参数、显示令牌化 URL 并启动本地服务。"""
 
-    parser = argparse.ArgumentParser(description="启动 LabOpsPanel 本地只读原型")
+    parser = argparse.ArgumentParser(description="启动 LabOpsPanel 本地运维面板")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=0, type=int)
     parser.add_argument("--data-dir", type=Path, help="用户级 SQLite 数据目录")

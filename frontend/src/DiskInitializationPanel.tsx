@@ -115,7 +115,7 @@ export default function DiskInitializationPanel({ token, privileged, devices }: 
   const interrupted = task?.state === 'interrupted'
   const expectedSerial = plan?.serial ?? status?.serial ?? ''
 
-  return <Card title="初始化并挂载空磁盘" extra={<Tag color="red">不可逆：单盘 GPT + ext4</Tag>}>
+  return <Card id="disk-initialization-panel" title="初始化并挂载空磁盘" extra={<Tag color="red">不可逆：单盘 GPT + ext4</Tag>}>
     <Alert className="notice" type="error" showIcon message="只选择确认无数据的磁盘。系统盘、已挂载盘、已有分区/签名及 LVM、RAID、ZFS 成员会被拒绝；格式化后的原数据无法恢复。" />
     <Form layout="vertical">
       <Form.Item label="磁盘稳定身份"><Select value={stableIdentity || undefined} onChange={value => { setStableIdentity(value); setPlan(null) }} options={disks.map(disk => ({ value: disk.stable_identity!, label: `${disk.model ?? disk.path} · ${bytes(disk.size)} · ${disk.stable_identity}` }))} /></Form.Item>

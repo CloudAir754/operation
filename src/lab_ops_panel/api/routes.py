@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import platform
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -48,6 +49,8 @@ class HomeScanRequest(BaseModel):
     idempotency_key: str = Field(min_length=16, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
     max_depth: int = Field(default=5, ge=1, le=8)
     max_nodes: int = Field(default=20_000, ge=100, le=50_000)
+    throttle_milliseconds: int | None = Field(default=None, ge=0, le=100)
+    snapshot_ttl_seconds: int | None = Field(default=None, ge=60, le=86_400)
 
 
 class UserStorageScanRequest(BaseModel):
@@ -61,8 +64,17 @@ class UserStorageScanRequest(BaseModel):
     include_hidden: bool = True
     cross_filesystems: bool = False
     include_unreadable: bool = True
-    throttle_milliseconds: int = Field(default=1, ge=0, le=100)
-    snapshot_ttl_seconds: int = Field(default=900, ge=60, le=86_400)
+    throttle_milliseconds: int | None = Field(default=None, ge=0, le=100)
+    snapshot_ttl_seconds: int | None = Field(default=None, ge=60, le=86_400)
+
+
+class AppSettingsRequest(BaseModel):
+    """设置页允许修改的完整白名单。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scan_throttle_milliseconds: int = Field(ge=0, le=100)
+    scan_snapshot_ttl_seconds: int = Field(ge=60, le=86_400)
 
 
 class TextImportRequest(BaseModel):
@@ -1065,6 +1077,33 @@ def recent_tasks(request: Request) -> list[dict[str, Any]]:
     return request.app.state.tasks.list_recent()
 
 
+@router.get("/settings")
+def get_app_settings(request: Request) -> dict[str, Any]:
+    """返回扫描默认值、数据库位置和当前进程运行信息。"""
+
+    return {
+        "values": request.app.state.app_settings.get_all(),
+        "database_path": str(request.app.state.database_path),
+        "runtime": {
+            "version": request.app.version,
+            "python": platform.python_version(),
+            "pid": os.getpid(),
+            "effective_uid": os.geteuid(),
+            "started_at": request.app.state.started_at.isoformat(),
+            "host": request.app.state.settings.host,
+        },
+    }
+
+
+@router.put("/settings")
+def update_app_settings(payload: AppSettingsRequest, request: Request) -> dict[str, Any]:
+    """更新非敏感扫描默认值；系统事实和会话令牌不可写。"""
+
+    values = request.app.state.app_settings.update(payload.model_dump())
+    request.app.state.tasks.log("更新应用设置", "本机扫描默认值", "succeeded")
+    return {"values": values}
+
+
 @router.get("/tasks/{task_id}")
 def task_detail(task_id: str, request: Request) -> dict[str, Any]:
     """返回单个持久化任务及步骤。"""
@@ -1080,11 +1119,22 @@ def start_home_scan(payload: HomeScanRequest, request: Request) -> dict[str, Any
     """创建可取消的 home 后台扫描，相同幂等键复用原任务。"""
 
     try:
+        settings = request.app.state.app_settings.get_all()
         return request.app.state.home_scans.start(
             payload.username,
             payload.idempotency_key,
             payload.max_depth,
             payload.max_nodes,
+            throttle_milliseconds=(
+                payload.throttle_milliseconds
+                if payload.throttle_milliseconds is not None
+                else settings["scan_throttle_milliseconds"]
+            ),
+            snapshot_ttl_seconds=(
+                payload.snapshot_ttl_seconds
+                if payload.snapshot_ttl_seconds is not None
+                else settings["scan_snapshot_ttl_seconds"]
+            ),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1143,6 +1193,7 @@ def start_user_storage_scan(payload: UserStorageScanRequest, request: Request) -
     """在当前挂载点内启动按 UID 汇总的限速后台扫描。"""
 
     allowed = {str(Path(item["mountpoint"]).resolve()) for item in mount_points()}
+    settings = request.app.state.app_settings.get_all()
     try:
         return request.app.state.user_storage_scans.start(
             payload.identity,
@@ -1153,8 +1204,12 @@ def start_user_storage_scan(payload: UserStorageScanRequest, request: Request) -
             payload.include_hidden,
             payload.cross_filesystems,
             payload.include_unreadable,
-            payload.throttle_milliseconds,
-            payload.snapshot_ttl_seconds,
+            payload.throttle_milliseconds
+            if payload.throttle_milliseconds is not None
+            else settings["scan_throttle_milliseconds"],
+            payload.snapshot_ttl_seconds
+            if payload.snapshot_ttl_seconds is not None
+            else settings["scan_snapshot_ttl_seconds"],
             allowed_mountpoints=allowed,
         )
     except ValueError as exc:

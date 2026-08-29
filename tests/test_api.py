@@ -34,6 +34,40 @@ def test_health_accepts_valid_token(tmp_path: Path) -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_settings_api_exposes_runtime_and_updates_only_scan_defaults(tmp_path: Path) -> None:
+    """设置页可修改受限扫描参数，但不能写入任意运行配置。"""
+
+    client, headers = _client(tmp_path)
+    with client:
+        before = client.get("/api/v1/settings", headers=headers)
+        updated = client.put(
+            "/api/v1/settings",
+            headers=headers,
+            json={
+                "scan_throttle_milliseconds": 3,
+                "scan_snapshot_ttl_seconds": 1200,
+            },
+        )
+        rejected = client.put(
+            "/api/v1/settings",
+            headers=headers,
+            json={
+                "scan_throttle_milliseconds": 3,
+                "scan_snapshot_ttl_seconds": 1200,
+                "host": "0.0.0.0",
+            },
+        )
+
+    assert before.status_code == 200
+    assert before.json()["database_path"].endswith("labopspanel.db")
+    assert before.json()["runtime"]["host"] == "127.0.0.1"
+    assert updated.json()["values"] == {
+        "scan_throttle_milliseconds": 3,
+        "scan_snapshot_ttl_seconds": 1200,
+    }
+    assert rejected.status_code == 422
+
+
 def test_overview_degrades_without_gpu(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """GPU 缺失不能令 CPU、内存和挂载信息接口失败。"""
 
@@ -95,9 +129,13 @@ def test_home_scan_api_requires_structured_validated_parameters(
     }
 
     class FakeManager:
-        def start(self, username, idempotency_key, max_depth, max_nodes):  # type: ignore[no-untyped-def]
+        def start(self, username, idempotency_key, max_depth, max_nodes, **kwargs):  # type: ignore[no-untyped-def]
             assert username == "alice"
             assert idempotency_key == "idempotency-key-123"
+            assert kwargs == {
+                "throttle_milliseconds": 1,
+                "snapshot_ttl_seconds": 900,
+            }
             return task
 
         def get(self, task_id):  # type: ignore[no-untyped-def]
@@ -140,6 +178,7 @@ def test_user_storage_scan_api_limits_scope_to_current_mounts(tmp_path: Path, mo
     class FakeManager:
         def start(self, *args, **kwargs):  # type: ignore[no-untyped-def]
             assert args[:3] == ("1000", "/data", "user-storage-key-123")
+            assert args[8:10] == (1, 900)
             assert kwargs["allowed_mountpoints"] == {"/data"}
             return task
 

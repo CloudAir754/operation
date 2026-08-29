@@ -1,4 +1,4 @@
-import type { DiskInitializationPlan, DiskInitializationStatus, GpuSnapshot, HomeMigrationStatus, HomeScanTask, Overview, PamPolicyChangePreview, PamPolicyChangeValues, PamPolicySnapshot, PasswordPolicySummary, PasswordPolicyValues, PersistentTask, PortUsageSnapshot, PrivilegedCapability, ResourceSnapshot, StorageSnapshot, UserAccount, UserImportPreview, UserStorageScanTask } from './types'
+import type { AppSettingsSnapshot, DiskInitializationPlan, DiskInitializationStatus, GpuSnapshot, HomeMigrationStatus, HomeScanTask, Overview, PamPolicyChangePreview, PamPolicyChangeValues, PamPolicySnapshot, PasswordPolicySummary, PasswordPolicyValues, PersistentTask, PortUsageSnapshot, PrivilegedCapability, ResourceSnapshot, StorageSnapshot, UserAccount, UserImportPreview, UserStorageScanTask } from './types'
 
 async function errorDetail(response: Response, fallback: string): Promise<string> {
   const body = await response.json().catch(() => null) as { detail?: string } | null
@@ -129,7 +129,6 @@ export async function startUserStorageScan(token: string, values: UserStorageSca
       ...values,
       idempotency_key: crypto.randomUUID(),
       max_nodes: 50000,
-      snapshot_ttl_seconds: 900,
     }),
   })
   if (!response.ok) throw new Error(await errorDetail(response, '启动用户占用扫描失败。'))
@@ -265,6 +264,27 @@ export async function loadTasks(token: string): Promise<PersistentTask[]> {
   return response.json() as Promise<PersistentTask[]>
 }
 
+export async function loadAppSettings(token: string): Promise<AppSettingsSnapshot> {
+  const response = await fetch('/api/v1/settings', {
+    headers: { 'X-LabOps-Token': token },
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '读取本机设置失败。'))
+  return response.json() as Promise<AppSettingsSnapshot>
+}
+
+export async function updateAppSettings(
+  token: string,
+  values: AppSettingsSnapshot['values'],
+): Promise<{ values: AppSettingsSnapshot['values'] }> {
+  const response = await fetch('/api/v1/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify(values),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '更新本机设置失败。'))
+  return response.json() as Promise<{ values: AppSettingsSnapshot['values'] }>
+}
+
 export async function downloadCredentials(token: string, taskId: string): Promise<void> {
   const response = await fetch(`/api/v1/tasks/${taskId}/credentials`, {
     headers: { 'X-LabOps-Token': token },
@@ -298,6 +318,29 @@ export async function importSshKeys(
   })
   if (!response.ok) throw new Error(await errorDetail(response, 'SSH 公钥导入失败。'))
   return response.json() as Promise<PersistentTask>
+}
+
+export interface SshKeyPreview {
+  counts: { valid: number, duplicate: number, invalid: number }
+  rows: Array<{
+    source_row: number
+    status: 'valid' | 'duplicate' | 'invalid'
+    error: string | null
+    key_type: string | null
+    comment: string | null
+    fingerprint: string | null
+    duplicate: boolean
+  }>
+}
+
+export async function previewSshKeys(token: string, keys: string): Promise<SshKeyPreview> {
+  const response = await fetch('/api/v1/ssh-keys/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({ keys }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, 'SSH 公钥预览失败。'))
+  return response.json() as Promise<SshKeyPreview>
 }
 
 export async function changeSudo(

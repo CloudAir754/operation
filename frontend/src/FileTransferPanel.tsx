@@ -74,7 +74,7 @@ export default function FileTransferPanel({ token, privileged }: Props) {
   const preflightSucceeded = task?.kind === 'file_transfer_preflight' && task.state === 'succeeded'
   const busy = Boolean(task && !terminalStates.has(task.state))
 
-  return <Card title="受控文件迁移" extra={<Tag color="orange">先复制，单独确认后清理源</Tag>}>
+  return <Card id="file-transfer-panel" title="受控文件迁移" extra={<Tag color="orange">先复制，单独确认后清理源</Tag>}>
     <Alert className="notice" type="warning" showIcon message="不跟随符号链接、不跨文件系统，拒绝系统关键路径和目标冲突；复制完成不会自动删除源数据。" />
     <Form layout="vertical">
       <Form.Item label="明确源路径"><Input value={source} onChange={event => setSource(event.target.value)} placeholder="/home/user/project" /></Form.Item>

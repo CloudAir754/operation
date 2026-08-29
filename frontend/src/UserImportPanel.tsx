@@ -159,7 +159,7 @@ export default function UserImportPanel({ token }: { token: string }) {
   }
 
   return <Row gutter={[16, 16]}>
-    <Col span={24}><Card title="批量账号导入与创建" extra={<Tag color={capability?.available ? 'green' : 'orange'}>{capability?.available ? '特权助手可用' : '创建功能未启用'}</Tag>}>
+    <Col span={24}><Card id="user-import-panel" title="批量账号导入与创建" extra={<Tag color={capability?.available ? 'green' : 'orange'}>{capability?.available ? '特权助手可用' : '创建功能未启用'}</Tag>}>
       <Tabs items={[
         { key: 'text', label: '粘贴文本', children: <Space direction="vertical" className="full-width"><Input.TextArea rows={6} value={text} onChange={event => setText(event.target.value)} placeholder={'username 中文姓名\nalice 张三'} /><Button type="primary" loading={loading} onClick={() => void runPreview('text')}>解析并预览</Button></Space> },
         { key: 'csv', label: 'CSV', children: <Space><Upload maxCount={1} accept=".csv,text/csv" beforeUpload={value => { setFile(value); setFileKind('csv'); return false }} onRemove={() => { setFile(null); return true }}><Button>选择 UTF-8 CSV</Button></Upload><Button type="primary" loading={loading} onClick={() => void runPreview('file')}>解析并预览</Button></Space> },

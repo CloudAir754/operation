@@ -130,6 +130,8 @@ def _local_identity(identity: str, passwd_path: Path = Path("/etc/passwd")) -> t
     """按用户名或十进制 UID 解析本机文件账号，返回稳定 UID。"""
 
     numeric_uid = int(identity) if identity.isdecimal() else None
+    if numeric_uid is not None and numeric_uid > 4_294_967_294:
+        raise ValueError("UID 超出本机有效范围")
     if numeric_uid is None and not USERNAME.fullmatch(identity):
         raise ValueError("用户名或 UID 格式无效")
     try:
@@ -146,6 +148,8 @@ def _local_identity(identity: str, passwd_path: Path = Path("/etc/passwd")) -> t
             continue
         if (numeric_uid is not None and uid == numeric_uid) or fields[0] == identity:
             return fields[0], uid
+    if numeric_uid is not None:
+        return f"UID {numeric_uid}", numeric_uid
     raise ValueError("本机账号不存在")
 
 
@@ -352,13 +356,22 @@ class HomeScanManager:
         max_depth: int,
         max_nodes: int,
         passwd_path: Path = Path("/etc/passwd"),
+        throttle_milliseconds: int = 0,
+        snapshot_ttl_seconds: int = 900,
     ) -> dict[str, Any]:
         """校验本机账号后创建或复用同参数扫描任务。"""
 
         _, root = _local_home(username, passwd_path)
         with self._lock:
             existing = self._idempotency.get(idempotency_key)
-            signature = (username, str(root), max_depth, max_nodes)
+            signature = (
+                username,
+                str(root),
+                max_depth,
+                max_nodes,
+                throttle_milliseconds,
+                snapshot_ttl_seconds,
+            )
             if existing:
                 if existing[1:] != signature:
                     raise ValueError("幂等键已用于不同扫描参数")
@@ -373,6 +386,8 @@ class HomeScanManager:
                         "scope": str(root),
                         "max_depth": max_depth,
                         "max_nodes": max_nodes,
+                        "throttle_milliseconds": throttle_milliseconds,
+                        "snapshot_ttl_seconds": snapshot_ttl_seconds,
                     },
                     f"{username}:{root}",
                     ["扫描并生成限时空间快照"],
@@ -389,6 +404,8 @@ class HomeScanManager:
                 root=root,
                 max_depth=max_depth,
                 max_nodes=max_nodes,
+                throttle_milliseconds=throttle_milliseconds,
+                snapshot_ttl_seconds=snapshot_ttl_seconds,
             )
             self._tasks[task.id] = task
             self._idempotency[idempotency_key] = (
@@ -397,6 +414,8 @@ class HomeScanManager:
                 str(root),
                 max_depth,
                 max_nodes,
+                throttle_milliseconds,
+                snapshot_ttl_seconds,
             )
             self._executor.submit(self._run, task)
             return task.public()

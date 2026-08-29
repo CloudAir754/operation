@@ -319,12 +319,30 @@ export interface PersistentTask {
   target: string
   parameters: Record<string, unknown>
   error: string | null
+  created_at: string
+  updated_at: string
   steps: Array<{
     sequence: number
     name: string
     state: string
     detail: Record<string, unknown> | null
   }>
+}
+
+export interface AppSettingsSnapshot {
+  values: {
+    scan_throttle_milliseconds: number
+    scan_snapshot_ttl_seconds: number
+  }
+  database_path: string
+  runtime: {
+    version: string
+    python: string
+    pid: number
+    effective_uid: number
+    started_at: string
+    host: string
+  }
 }
 
 export interface HomeMigrationStatus {

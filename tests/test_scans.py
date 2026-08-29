@@ -13,6 +13,7 @@ from lab_ops_panel.infrastructure.scans import (
     HomeScanManager,
     ScanTask,
     UserStorageScanManager,
+    _local_identity,
     _TreeScanner,
 )
 from lab_ops_panel.infrastructure.tasks import TaskRepository
@@ -167,6 +168,17 @@ def test_user_storage_scan_rejects_non_mount_scope(tmp_path: Path) -> None:
             passwd,
             {"/"},
         )
+
+
+def test_numeric_orphan_uid_can_be_used_for_read_only_usage_search(tmp_path: Path) -> None:
+    """没有当前账号名称的合法 UID 仍可用于查找遗留文件占用。"""
+
+    passwd = tmp_path / "passwd"
+    passwd.write_text("alice:x:1000:1000::/home/alice:/bin/bash\n", encoding="utf-8")
+
+    assert _local_identity("2000", passwd) == ("UID 2000", 2000)
+    with pytest.raises(ValueError, match="有效范围"):
+        _local_identity("4294967295", passwd)
 
 
 def test_completed_scan_updates_persistent_task_and_snapshot(tmp_path: Path) -> None:

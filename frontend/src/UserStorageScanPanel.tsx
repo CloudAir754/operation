@@ -1,6 +1,6 @@
 import { Alert, AutoComplete, Button, Card, Col, Descriptions, Form, InputNumber, Row, Select, Space, Spin, Switch, Table, Tag, Typography } from 'antd'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import { cancelUserStorageScan, startUserStorageScan, watchUserStorageScan } from './api'
+import { cancelUserStorageScan, loadAppSettings, startUserStorageScan, watchUserStorageScan } from './api'
 import type { MountPoint, UserAccount, UserStorageScanTask } from './types'
 
 const TreemapView = lazy(() => import('./TreemapView'))
@@ -27,11 +27,17 @@ interface Values {
 }
 
 export default function UserStorageScanPanel({ token, users, mounts }: { token: string, users: UserAccount[], mounts: MountPoint[] }) {
+  const [form] = Form.useForm<Values>()
   const [task, setTask] = useState<UserStorageScanTask | null>(null)
   const [error, setError] = useState('')
   const controller = useRef<AbortController | null>(null)
 
-  useEffect(() => () => controller.current?.abort(), [])
+  useEffect(() => {
+    void loadAppSettings(token).then(settings => {
+      form.setFieldValue('throttle_milliseconds', settings.values.scan_throttle_milliseconds)
+    }).catch(() => undefined)
+    return () => controller.current?.abort()
+  }, [form, token])
 
   const start = async (values: Values) => {
     setError('')
@@ -62,15 +68,16 @@ export default function UserStorageScanPanel({ token, users, mounts }: { token: 
 
   return <Card title="按用户搜索磁盘占用" extra={running && <Button danger onClick={() => void cancel()}>取消扫描</Button>}>
     <Form<Values>
+      form={form}
       layout="vertical"
-      initialValues={{ max_depth: 8, include_hidden: true, cross_filesystems: false, include_unreadable: true, throttle_milliseconds: 1, mountpoint: mounts[0]?.mountpoint }}
+      initialValues={{ max_depth: 8, include_hidden: true, cross_filesystems: false, include_unreadable: true, mountpoint: mounts[0]?.mountpoint }}
       onFinish={values => void start(values)}
     >
       <Row gutter={12}>
-        <Col xs={24} md={6}><Form.Item label="用户名或 UID" name="identity" rules={[{ required: true }]}><AutoComplete placeholder="输入用户名或十进制 UID" filterOption={(input, option) => String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())} options={users.map(user => ({ value: user.username, label: `${user.username} · UID ${user.uid}` }))} /></Form.Item></Col>
+        <Col xs={24} md={6}><Form.Item label="用户名或 UID" name="identity" rules={[{ required: true }]}><AutoComplete placeholder="输入用户名或十进制 UID" filterOption={(input, option) => String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())} options={users.map(user => ({ value: user.account_source === 'local' ? user.username : String(user.uid), label: `${user.username} · UID ${user.uid} · ${user.account_source}` }))} /></Form.Item></Col>
         <Col xs={24} md={8}><Form.Item label="完整挂载点" name="mountpoint" rules={[{ required: true }]}><Select options={mounts.map(mount => ({ value: mount.mountpoint, label: `${mount.mountpoint} · ${mount.filesystem}` }))} /></Form.Item></Col>
         <Col xs={12} md={3}><Form.Item label="扫描深度" name="max_depth"><InputNumber min={1} max={32} /></Form.Item></Col>
-        <Col xs={12} md={3}><Form.Item label="每节点限速 (ms)" name="throttle_milliseconds"><InputNumber min={0} max={100} /></Form.Item></Col>
+        <Col xs={12} md={3}><Form.Item label="每节点限速 (ms)" name="throttle_milliseconds" rules={[{ required: true }]}><InputNumber min={0} max={100} /></Form.Item></Col>
         <Col xs={24} md={4}><Form.Item label="操作"><Button type="primary" htmlType="submit" loading={running} disabled={!mounts.length}>开始扫描</Button></Form.Item></Col>
       </Row>
       <Space wrap>

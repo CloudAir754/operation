@@ -138,7 +138,7 @@ export default function HomeMigrationPanel({ token, privileged, users }: Props) 
   const expectedRollback = `回退home:${migrationUsername}`
   const expectedCleanup = `清理原home备份:${migrationUsername}`
 
-  return <Card title="整个 home 跨盘迁移" extra={<Tag color="red">仅 ext4 → ext4</Tag>}>
+  return <Card id="home-migration-panel" title="整个 home 跨盘迁移" extra={<Tag color="red">仅 ext4 → ext4</Tag>}>
     <Alert className="notice" type="warning" showIcon message="迁移会锁定账号并终止该 UID 的全部会话、服务和进程。原 home 在观察期完整保留，不会自动清理。" />
     <Form layout="vertical">
       <Space wrap align="start">

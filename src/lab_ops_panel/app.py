@@ -5,6 +5,7 @@ from __future__ import annotations
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -22,6 +23,7 @@ from lab_ops_panel.application.user_creation import UserCreationManager
 from lab_ops_panel.application.user_deletion import UserDeletionManager
 from lab_ops_panel.config import Settings, ensure_unprivileged
 from lab_ops_panel.database import initialize_database
+from lab_ops_panel.infrastructure.app_settings import AppSettingsRepository
 from lab_ops_panel.infrastructure.privileged import PrivilegedExecutor
 from lab_ops_panel.infrastructure.scans import HomeScanManager, UserStorageScanManager
 from lab_ops_panel.infrastructure.tasks import TaskRepository
@@ -38,6 +40,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.database_path = initialize_database(active_settings.data_dir)
         app.state.tasks = TaskRepository(app.state.database_path)
+        app.state.app_settings = AppSettingsRepository(app.state.database_path)
+        app.state.started_at = datetime.now(UTC)
         app.state.cleaned_operation_logs = app.state.tasks.cleanup_operation_logs()
         app.state.cleaned_scan_snapshots = app.state.tasks.cleanup_scan_snapshots()
         app.state.interrupted_tasks = app.state.tasks.mark_running_interrupted()

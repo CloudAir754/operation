@@ -24,12 +24,18 @@ ALLOWED_ACTIONS = frozenset(
         "uid-processes-terminate",
         "user-delete-preflight",
         "user-delete",
+        "file-transfer-preflight",
+        "file-transfer-copy",
+        "file-transfer-cleanup",
     }
 )
 ACTION_TIMEOUTS = {
     # home 占用统计和同文件系统递归清理可能明显超过普通账号动作。
     "user-delete-preflight": 600,
     "user-delete": 3600,
+    "file-transfer-preflight": 3600,
+    "file-transfer-copy": 7200,
+    "file-transfer-cleanup": 3600,
 }
 
 

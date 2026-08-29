@@ -370,3 +370,56 @@ export async function deleteUser(
   if (!response.ok) throw new Error(await errorDetail(response, '删除用户任务启动失败。'))
   return response.json() as Promise<PersistentTask>
 }
+
+export async function startFileTransferPreflight(
+  token: string,
+  source: string,
+  targetDirectory: string,
+): Promise<PersistentTask> {
+  const response = await fetch('/api/v1/file-transfers/preflight', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({
+      source,
+      target_directory: targetDirectory,
+      idempotency_key: crypto.randomUUID(),
+    }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '文件迁移预检启动失败。'))
+  return response.json() as Promise<PersistentTask>
+}
+
+export async function copyFileTransfer(
+  token: string,
+  preflightTaskId: string,
+): Promise<PersistentTask> {
+  const response = await fetch('/api/v1/file-transfers/copy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({
+      preflight_task_id: preflightTaskId,
+      confirmation: '复制并保留源文件',
+      idempotency_key: crypto.randomUUID(),
+    }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '文件复制任务启动失败。'))
+  return response.json() as Promise<PersistentTask>
+}
+
+export async function cleanupFileTransfer(
+  token: string,
+  copyTaskId: string,
+  confirmation: string,
+): Promise<PersistentTask> {
+  const response = await fetch('/api/v1/file-transfers/cleanup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({
+      copy_task_id: copyTaskId,
+      confirmation,
+      idempotency_key: crypto.randomUUID(),
+    }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '源文件清理任务启动失败。'))
+  return response.json() as Promise<PersistentTask>
+}

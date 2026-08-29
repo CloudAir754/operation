@@ -144,6 +144,27 @@ class UserDeleteRequest(AccountActionRequest):
     confirmation: str = Field(min_length=1, max_length=32)
 
 
+class FileTransferPreflightRequest(AccountActionRequest):
+    """部分文件迁移的源路径与目标目录。"""
+
+    source: str = Field(min_length=2, max_length=1000)
+    target_directory: str = Field(min_length=2, max_length=1000)
+
+
+class FileTransferCopyRequest(AccountActionRequest):
+    """引用近期成功预检的只复制任务。"""
+
+    preflight_task_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    confirmation: str = Field(max_length=50)
+
+
+class FileTransferCleanupRequest(AccountActionRequest):
+    """引用成功复制任务的独立源清理确认。"""
+
+    copy_task_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    confirmation: str = Field(min_length=2, max_length=1000)
+
+
 class SshKeyPreviewRequest(BaseModel):
     """SSH 公钥粘贴预览参数。"""
 
@@ -538,6 +559,89 @@ def delete_user(username: str, request: UserDeleteRequest, http_request: Request
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _successful_task(request: Request, task_id: str, kind: str) -> dict[str, Any]:
+    """读取指定类型的成功任务，供后续高风险阶段绑定。"""
+
+    try:
+        task = request.app.state.tasks.get(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="关联任务不存在") from exc
+    if task["kind"] != kind or task["state"] != "succeeded":
+        raise HTTPException(status_code=409, detail="关联任务类型不匹配或尚未成功")
+    return task
+
+
+@router.post("/file-transfers/preflight", status_code=202)
+def start_file_transfer_preflight(
+    request: FileTransferPreflightRequest, http_request: Request
+) -> dict[str, Any]:
+    """启动不写磁盘的路径、容量和 inode 预检。"""
+
+    _require_privileged_helper(http_request)
+    try:
+        return http_request.app.state.file_transfer.start_preflight(
+            request.source, request.target_directory, request.idempotency_key
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/file-transfers/copy", status_code=202)
+def start_file_transfer_copy(
+    request: FileTransferCopyRequest, http_request: Request
+) -> dict[str, Any]:
+    """近期预检成功且明确确认后，复制、校验并发布目标路径。"""
+
+    _require_privileged_helper(http_request)
+    if request.confirmation != "复制并保留源文件":
+        raise HTTPException(status_code=400, detail="文件复制确认文本不匹配")
+    preflight = _successful_task(http_request, request.preflight_task_id, "file_transfer_preflight")
+    created_at = datetime.fromisoformat(preflight["created_at"])
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    if datetime.now(UTC) - created_at > timedelta(minutes=10):
+        raise HTTPException(status_code=409, detail="文件迁移预检已超过十分钟，请重新执行")
+    parameters = preflight["parameters"]
+    detail = preflight["steps"][1]["detail"] or {}
+    summary = detail.get("source_summary") or {}
+    try:
+        return http_request.app.state.file_transfer.start_copy(
+            str(parameters["source"]),
+            str(parameters["target_directory"]),
+            int(summary["device"]),
+            int(summary["inode"]),
+            preflight["id"],
+            request.idempotency_key,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail="文件迁移预检结果不完整") from exc
+
+
+@router.post("/file-transfers/cleanup", status_code=202)
+def cleanup_file_transfer_source_api(
+    request: FileTransferCleanupRequest, http_request: Request
+) -> dict[str, Any]:
+    """完整输入源路径后，启动独立的源数据清理任务。"""
+
+    _require_privileged_helper(http_request)
+    copied = _successful_task(http_request, request.copy_task_id, "file_transfer_copy")
+    result = copied["steps"][-1]["detail"] or {}
+    source = str(result.get("source", ""))
+    if request.confirmation != source:
+        raise HTTPException(status_code=400, detail="源清理确认必须完整输入源路径")
+    try:
+        return http_request.app.state.file_transfer.start_cleanup(
+            source,
+            str(result["destination"]),
+            int(result["source_device"]),
+            int(result["source_inode"]),
+            copied["id"],
+            request.idempotency_key,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail="文件复制结果不完整") from exc
 
 
 def _require_privileged_helper(request: Request) -> None:

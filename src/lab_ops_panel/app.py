@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from lab_ops_panel.api.routes import router
 from lab_ops_panel.application.account_access import AccountAccessManager
+from lab_ops_panel.application.file_transfer import FileTransferManager
 from lab_ops_panel.application.pam_policy import PamPolicyManager
 from lab_ops_panel.application.process_control import ProcessControlManager
 from lab_ops_panel.application.user_creation import UserCreationManager
@@ -44,9 +45,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.pam_policy = PamPolicyManager(app.state.tasks, app.state.privileged)
         app.state.process_control = ProcessControlManager(app.state.tasks, app.state.privileged)
         app.state.user_deletion = UserDeletionManager(app.state.tasks, app.state.privileged)
+        app.state.file_transfer = FileTransferManager(app.state.tasks, app.state.privileged)
         try:
             yield
         finally:
+            app.state.file_transfer.close()
             app.state.user_deletion.close()
             app.state.process_control.close()
             app.state.pam_policy.close()

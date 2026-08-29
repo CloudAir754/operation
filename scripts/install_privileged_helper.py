@@ -27,6 +27,9 @@ ACTIONS = (
     "uid-processes-terminate",
     "user-delete-preflight",
     "user-delete",
+    "file-transfer-preflight",
+    "file-transfer-copy",
+    "file-transfer-cleanup",
 )
 HELPER = Path("/usr/local/libexec/labopspanel-privileged")
 TOOL_DIRECTORY = Path("/usr/local/lib/labopspanel-tools")

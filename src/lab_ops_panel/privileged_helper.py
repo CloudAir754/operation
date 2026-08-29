@@ -13,6 +13,11 @@ from typing import Any
 from lab_ops_panel.domain.ssh_keys import parse_public_key
 from lab_ops_panel.domain.user_imports import USERNAME
 from lab_ops_panel.infrastructure.authorized_keys import import_authorized_keys
+from lab_ops_panel.infrastructure.file_transfer import (
+    cleanup_file_transfer_source,
+    execute_file_transfer,
+    file_transfer_preflight,
+)
 from lab_ops_panel.infrastructure.pam_rules import apply_policy_changes, restore_policy_backup
 from lab_ops_panel.infrastructure.processes import (
     port_usage,
@@ -133,6 +138,46 @@ def _dispatch(action: str, payload: dict[str, Any]) -> dict[str, Any]:
 
     if action == "create-user":
         return _create_user(payload)
+    if action == "file-transfer-preflight":
+        source = payload.get("source")
+        target_directory = payload.get("target_directory")
+        if not isinstance(source, str) or not isinstance(target_directory, str):
+            raise ValueError("文件迁移预检参数无效")
+        return file_transfer_preflight(source, target_directory)
+    if action == "file-transfer-copy":
+        source = payload.get("source")
+        target_directory = payload.get("target_directory")
+        operation_id = payload.get("operation_id")
+        expected_device = payload.get("expected_device")
+        expected_inode = payload.get("expected_inode")
+        if (
+            not isinstance(source, str)
+            or not isinstance(target_directory, str)
+            or not isinstance(operation_id, str)
+            or not isinstance(expected_device, int)
+            or not isinstance(expected_inode, int)
+        ):
+            raise ValueError("文件复制参数无效")
+        return execute_file_transfer(
+            source, target_directory, operation_id, expected_device, expected_inode
+        )
+    if action == "file-transfer-cleanup":
+        source = payload.get("source")
+        destination = payload.get("destination")
+        operation_id = payload.get("operation_id")
+        expected_device = payload.get("expected_device")
+        expected_inode = payload.get("expected_inode")
+        if (
+            not isinstance(source, str)
+            or not isinstance(destination, str)
+            or not isinstance(operation_id, str)
+            or not isinstance(expected_device, int)
+            or not isinstance(expected_inode, int)
+        ):
+            raise ValueError("文件清理参数无效")
+        return cleanup_file_transfer_source(
+            source, destination, operation_id, expected_device, expected_inode
+        )
     if action == "pam-update":
         changes = payload.get("changes")
         if not isinstance(changes, dict):

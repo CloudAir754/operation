@@ -535,3 +535,103 @@ def test_user_delete_requires_successful_matching_preflight_and_username_confirm
             "delete-user-key-123",
         )
     ]
+
+
+def test_file_transfer_copy_and_cleanup_bind_successful_tasks(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """文件复制绑定近期预检，源清理绑定成功复制结果和完整路径确认。"""
+
+    monkeypatch.setattr(
+        "lab_ops_panel.api.routes.helper_capability",
+        lambda path: {"available": True, "reason": None, "path": str(path)},
+    )
+    response_task = {"id": "response", "state": "queued", "steps": []}
+    calls = []
+    client, headers = _client(tmp_path)
+    with client:
+        repository = client.app.state.tasks
+        preflight = repository.create_or_get(
+            "file_transfer_preflight",
+            "file-preview-key-123",
+            {"source": "/data/source", "target_directory": "/mnt/archive"},
+            "/data/source",
+            ["边界", "容量"],
+        )
+        repository.transition(preflight["id"], "prechecking")
+        repository.transition(preflight["id"], "running")
+        repository.update_step(
+            preflight["id"],
+            2,
+            "succeeded",
+            {"source_summary": {"device": 10, "inode": 20}},
+        )
+        repository.transition(preflight["id"], "succeeded")
+        copy_record = repository.create_or_get(
+            "file_transfer_copy",
+            "file-copy-record-123",
+            {"source": "/data/source"},
+            "/data/source",
+            ["预检", "复制", "发布"],
+        )
+        repository.transition(copy_record["id"], "prechecking")
+        repository.transition(copy_record["id"], "running")
+        repository.update_step(
+            copy_record["id"],
+            3,
+            "succeeded",
+            {
+                "source": "/data/source",
+                "destination": "/mnt/archive/source",
+                "source_device": 10,
+                "source_inode": 20,
+                "source_retained": True,
+            },
+        )
+        repository.transition(copy_record["id"], "succeeded")
+        client.app.state.file_transfer.start_copy = lambda *args: (
+            calls.append(("copy", args)) or response_task
+        )
+        client.app.state.file_transfer.start_cleanup = lambda *args: (
+            calls.append(("cleanup", args)) or response_task
+        )
+        copied = client.post(
+            "/api/v1/file-transfers/copy",
+            headers=headers,
+            json={
+                "preflight_task_id": preflight["id"],
+                "confirmation": "复制并保留源文件",
+                "idempotency_key": "file-copy-key-123",
+            },
+        )
+        rejected = client.post(
+            "/api/v1/file-transfers/cleanup",
+            headers=headers,
+            json={
+                "copy_task_id": copy_record["id"],
+                "confirmation": "/data/other",
+                "idempotency_key": "file-clean-key-123",
+            },
+        )
+        cleaned = client.post(
+            "/api/v1/file-transfers/cleanup",
+            headers=headers,
+            json={
+                "copy_task_id": copy_record["id"],
+                "confirmation": "/data/source",
+                "idempotency_key": "file-clean-key-123",
+            },
+        )
+
+    assert copied.status_code == cleaned.status_code == 202
+    assert rejected.status_code == 400
+    assert calls[0][0] == "copy" and calls[0][1][:4] == (
+        "/data/source",
+        "/mnt/archive",
+        10,
+        20,
+    )
+    assert calls[1][0] == "cleanup" and calls[1][1][:4] == (
+        "/data/source",
+        "/mnt/archive/source",
+        10,
+        20,
+    )

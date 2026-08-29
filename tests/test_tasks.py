@@ -1,10 +1,13 @@
-"""持久化任务状态机与幂等测试。"""
+"""持久化任务状态机、幂等与日志保留测试。"""
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
-from lab_ops_panel.database import initialize_database
+from lab_ops_panel.database import OperationLogRecord, initialize_database
 from lab_ops_panel.infrastructure.tasks import TaskRepository
 
 
@@ -100,3 +103,40 @@ def test_queued_and_prechecking_tasks_are_also_interrupted_after_restart(
     assert repository.mark_running_interrupted() == 2
     assert repository.get(queued["id"])["state"] == "interrupted"
     assert repository.get(prechecking["id"])["state"] == "interrupted"
+
+
+def test_operation_log_cleanup_applies_age_and_count_limits(tmp_path: Path) -> None:
+    """启动清理应同时移除过期记录，并只保留最新的有限条目。"""
+
+    repository = _repository(tmp_path)
+    old_time = datetime.now(UTC) - timedelta(days=91)
+    with Session(repository.engine) as session:
+        session.add(
+            OperationLogRecord(
+                action="旧动作", target="uid:1001", result="succeeded", created_at=old_time
+            )
+        )
+        session.add_all(
+            OperationLogRecord(action="动作", target=f"uid:{uid}", result="succeeded")
+            for uid in range(1002, 1006)
+        )
+        session.commit()
+
+    assert repository.cleanup_operation_logs(max_age_days=90, max_records=2) == 3
+    with Session(repository.engine) as session:
+        remaining = list(
+            session.scalars(select(OperationLogRecord).order_by(OperationLogRecord.id))
+        )
+        assert len(remaining) == 2
+        assert {record.target for record in remaining} == {"uid:1004", "uid:1005"}
+        assert session.scalar(select(func.count()).select_from(OperationLogRecord)) == 2
+
+
+def test_operation_log_cleanup_rejects_unbounded_configuration(tmp_path: Path) -> None:
+    """保留策略不能通过零或负数意外关闭边界。"""
+
+    repository = _repository(tmp_path)
+    with pytest.raises(ValueError, match="至少为 1"):
+        repository.cleanup_operation_logs(max_age_days=0)
+    with pytest.raises(ValueError, match="至少为 1"):
+        repository.cleanup_operation_logs(max_records=0)

@@ -5,11 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -215,6 +215,40 @@ class TaskRepository:
                 )
             )
             session.commit()
+
+    def cleanup_operation_logs(self, max_age_days: int = 90, max_records: int = 10_000) -> int:
+        """删除过期及超出数量上限的操作日志，返回实际删除条数。"""
+
+        if max_age_days < 1:
+            raise ValueError("操作日志保留天数至少为 1")
+        if max_records < 1:
+            raise ValueError("操作日志保留条数至少为 1")
+        cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
+        with Session(self.engine) as session:
+            expired_ids = list(
+                session.scalars(
+                    select(OperationLogRecord.id).where(OperationLogRecord.created_at < cutoff)
+                )
+            )
+            if expired_ids:
+                session.execute(
+                    delete(OperationLogRecord).where(OperationLogRecord.id.in_(expired_ids))
+                )
+
+            retained_ids = list(
+                session.scalars(
+                    select(OperationLogRecord.id)
+                    .order_by(OperationLogRecord.created_at.desc(), OperationLogRecord.id.desc())
+                    .offset(max_records)
+                )
+            )
+            excess_ids = [record_id for record_id in retained_ids if record_id not in expired_ids]
+            if excess_ids:
+                session.execute(
+                    delete(OperationLogRecord).where(OperationLogRecord.id.in_(excess_ids))
+                )
+            session.commit()
+            return len(expired_ids) + len(excess_ids)
 
     @staticmethod
     def _assert_same(task: TaskRecord, kind: str, digest: str, target: str) -> None:

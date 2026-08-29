@@ -34,6 +34,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.database_path = initialize_database(active_settings.data_dir)
         app.state.tasks = TaskRepository(app.state.database_path)
+        app.state.cleaned_operation_logs = app.state.tasks.cleanup_operation_logs()
         app.state.interrupted_tasks = app.state.tasks.mark_running_interrupted()
         app.state.privileged = PrivilegedExecutor()
         app.state.user_creation = UserCreationManager(

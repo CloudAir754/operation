@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from lab_ops_panel.database import OperationLogRecord, initialize_database
+from lab_ops_panel.database import OperationLogRecord, ScanSnapshotRecord, initialize_database
 from lab_ops_panel.infrastructure.tasks import TaskRepository
 
 
@@ -140,3 +140,31 @@ def test_operation_log_cleanup_rejects_unbounded_configuration(tmp_path: Path) -
         repository.cleanup_operation_logs(max_age_days=0)
     with pytest.raises(ValueError, match="至少为 1"):
         repository.cleanup_operation_logs(max_records=0)
+
+
+def test_scan_snapshot_is_persisted_and_removed_after_expiry(tmp_path: Path) -> None:
+    """空间树只在有效期内保留，并与持久化扫描任务关联。"""
+
+    repository = _repository(tmp_path)
+    task = repository.create_or_get(
+        "user_storage_scan", "scan-snapshot-key-123", {}, "UID 1000:/data", ["扫描"]
+    )
+    scanned_at = datetime.now(UTC)
+    expires_at = scanned_at + timedelta(minutes=15)
+    result = {
+        "scanned_at": scanned_at.isoformat(),
+        "expires_at": expires_at.isoformat(),
+        "scope": "/data",
+        "nodes_scanned": 1,
+        "tree": {"path": "/data", "children": []},
+    }
+
+    repository.save_scan_snapshot(task["id"], result)
+
+    with Session(repository.engine) as session:
+        snapshot = session.scalar(select(ScanSnapshotRecord))
+        assert snapshot is not None
+        assert snapshot.summary["scope"] == "/data"
+        assert "tree" not in snapshot.summary
+        assert snapshot.tree["path"] == "/data"
+    assert repository.cleanup_scan_snapshots(expires_at + timedelta(seconds=1)) == 1

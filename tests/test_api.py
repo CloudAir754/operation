@@ -103,9 +103,12 @@ def test_home_scan_api_requires_structured_validated_parameters(
         def get(self, task_id):  # type: ignore[no-untyped-def]
             return task
 
-    monkeypatch.setattr("lab_ops_panel.api.routes.home_scan_manager", FakeManager())
+        def close(self):  # type: ignore[no-untyped-def]
+            return None
+
     client, headers = _client(tmp_path)
     with client:
+        client.app.state.home_scans = FakeManager()
         accepted = client.post(
             "/api/v1/home-scans",
             headers=headers,
@@ -126,6 +129,56 @@ def test_home_scan_api_requires_structured_validated_parameters(
     assert accepted.status_code == 202
     assert rejected.status_code == 422
     assert events.headers["content-type"].startswith("text/event-stream")
+    assert '"state": "completed"' in events.text
+
+
+def test_user_storage_scan_api_limits_scope_to_current_mounts(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """按 UID 扫描只把系统当前挂载点传给基础设施层校验。"""
+
+    task = {"id": "storage-task", "state": "completed"}
+
+    class FakeManager:
+        def start(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            assert args[:3] == ("1000", "/data", "user-storage-key-123")
+            assert kwargs["allowed_mountpoints"] == {"/data"}
+            return task
+
+        def get(self, task_id):  # type: ignore[no-untyped-def]
+            assert task_id == "storage-task"
+            return task
+
+        def close(self):  # type: ignore[no-untyped-def]
+            return None
+
+    monkeypatch.setattr(
+        "lab_ops_panel.api.routes.mount_points",
+        lambda: [{"mountpoint": "/data"}],
+    )
+    client, headers = _client(tmp_path)
+    with client:
+        client.app.state.user_storage_scans = FakeManager()
+        accepted = client.post(
+            "/api/v1/user-storage-scans",
+            headers=headers,
+            json={
+                "identity": "1000",
+                "mountpoint": "/data",
+                "idempotency_key": "user-storage-key-123",
+            },
+        )
+        rejected = client.post(
+            "/api/v1/user-storage-scans",
+            headers=headers,
+            json={
+                "identity": "../1000",
+                "mountpoint": "/data",
+                "idempotency_key": "user-storage-key-456",
+            },
+        )
+        events = client.get("/api/v1/user-storage-scans/storage-task/events", headers=headers)
+
+    assert accepted.status_code == 202
+    assert rejected.status_code == 422
     assert '"state": "completed"' in events.text
 
 

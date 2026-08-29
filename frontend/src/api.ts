@@ -1,4 +1,4 @@
-import type { DiskInitializationPlan, DiskInitializationStatus, GpuSnapshot, HomeMigrationStatus, HomeScanTask, Overview, PamPolicyChangePreview, PamPolicyChangeValues, PamPolicySnapshot, PasswordPolicySummary, PasswordPolicyValues, PersistentTask, PortUsageSnapshot, PrivilegedCapability, ResourceSnapshot, StorageSnapshot, UserAccount, UserImportPreview } from './types'
+import type { DiskInitializationPlan, DiskInitializationStatus, GpuSnapshot, HomeMigrationStatus, HomeScanTask, Overview, PamPolicyChangePreview, PamPolicyChangeValues, PamPolicySnapshot, PasswordPolicySummary, PasswordPolicyValues, PersistentTask, PortUsageSnapshot, PrivilegedCapability, ResourceSnapshot, StorageSnapshot, UserAccount, UserImportPreview, UserStorageScanTask } from './types'
 
 async function errorDetail(response: Response, fallback: string): Promise<string> {
   const body = await response.json().catch(() => null) as { detail?: string } | null
@@ -106,6 +106,67 @@ export async function watchHomeScan(
     for (const event of events) {
       const data = event.split('\n').find(line => line.startsWith('data: '))
       if (data) onUpdate(JSON.parse(data.slice(6)) as HomeScanTask)
+    }
+    if (done) break
+  }
+}
+
+export interface UserStorageScanValues {
+  identity: string
+  mountpoint: string
+  max_depth: number
+  include_hidden: boolean
+  cross_filesystems: boolean
+  include_unreadable: boolean
+  throttle_milliseconds: number
+}
+
+export async function startUserStorageScan(token: string, values: UserStorageScanValues): Promise<UserStorageScanTask> {
+  const response = await fetch('/api/v1/user-storage-scans', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({
+      ...values,
+      idempotency_key: crypto.randomUUID(),
+      max_nodes: 50000,
+      snapshot_ttl_seconds: 900,
+    }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '启动用户占用扫描失败。'))
+  return response.json() as Promise<UserStorageScanTask>
+}
+
+export async function cancelUserStorageScan(token: string, taskId: string): Promise<UserStorageScanTask> {
+  const response = await fetch(`/api/v1/user-storage-scans/${taskId}/cancel`, {
+    method: 'POST',
+    headers: { 'X-LabOps-Token': token },
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '取消用户占用扫描失败。'))
+  return response.json() as Promise<UserStorageScanTask>
+}
+
+export async function watchUserStorageScan(
+  token: string,
+  taskId: string,
+  onUpdate: (task: UserStorageScanTask) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`/api/v1/user-storage-scans/${taskId}/events`, {
+    headers: { Accept: 'text/event-stream', 'X-LabOps-Token': token },
+    signal,
+  })
+  if (!response.ok || !response.body) throw new Error('连接用户占用扫描进度流失败。')
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done })
+    const messages = buffer.split('\n\n')
+    buffer = messages.pop() ?? ''
+    for (const message of messages) {
+      const data = message.split('\n').find(line => line.startsWith('data: '))
+      if (data) onUpdate(JSON.parse(data.slice(6)) as UserStorageScanTask)
     }
     if (done) break
   }

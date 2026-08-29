@@ -37,6 +37,8 @@ sudo /usr/bin/python3 scripts/install_privileged_helper.py "$labops_user" --uv "
 - NVIDIA GPU 整卡与进程视图，不支持的指标逐字段显示 `N/A`；
 - 本机账号、UID/GID、逻辑与物理 home、文件系统、Shell 和 sudoers 来源；
 - 可取消、默认不跨文件系统、不跟随符号链接的 home 后台扫描及 treemap；
+- 按用户名或 UID 在管理员选择的完整挂载点内限速扫描，支持隐藏文件、跨文件系统和权限盲区选项，并以限时 SQLite 快照保存结果；
+- SpaceSniffer 式 treemap 下钻、所有者筛选、大文件过滤、风险/变化/硬链接标记和当前摘要 CSV 导出；
 - 受控部分文件迁移，先复制并校验元数据、原子发布目标，再由管理员独立确认清理源路径；
 - 可恢复的 ext4 home 跨盘迁移，按 UID 冻结进程、原地保留备份、复制校验、链接切换、用户身份试验，并支持中断恢复、回退和独立人工清理；
 - 空盘 GPT + ext4 初始化，纯预览命令计划、稳定设备身份和序列号确认、系统盘/挂载/签名/holder 拒绝、UUID `fstab` 原子更新、挂载验证及失败恢复；

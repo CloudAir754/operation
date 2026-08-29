@@ -5,6 +5,7 @@ import json
 import os
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, Response, UploadFile
@@ -29,7 +30,7 @@ from lab_ops_panel.infrastructure.processes import (
     process_identity,
 )
 from lab_ops_panel.infrastructure.resources import resource_snapshot
-from lab_ops_panel.infrastructure.scans import TERMINAL_STATES, home_scan_manager
+from lab_ops_panel.infrastructure.scans import TERMINAL_STATES
 from lab_ops_panel.infrastructure.storage import block_device_snapshot
 from lab_ops_panel.infrastructure.system_info import (
     local_users,
@@ -47,6 +48,21 @@ class HomeScanRequest(BaseModel):
     idempotency_key: str = Field(min_length=16, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
     max_depth: int = Field(default=5, ge=1, le=8)
     max_nodes: int = Field(default=20_000, ge=100, le=50_000)
+
+
+class UserStorageScanRequest(BaseModel):
+    """按稳定 UID 扫描所选挂载点所需的受限参数。"""
+
+    identity: str = Field(pattern=r"^(?:[a-z_][a-z0-9_.-]*[$]?|[0-9]{1,10})$", max_length=32)
+    mountpoint: str = Field(min_length=1, max_length=4096)
+    idempotency_key: str = Field(min_length=16, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
+    max_depth: int = Field(default=8, ge=1, le=32)
+    max_nodes: int = Field(default=50_000, ge=100, le=250_000)
+    include_hidden: bool = True
+    cross_filesystems: bool = False
+    include_unreadable: bool = True
+    throttle_milliseconds: int = Field(default=1, ge=0, le=100)
+    snapshot_ttl_seconds: int = Field(default=900, ge=60, le=86_400)
 
 
 class TextImportRequest(BaseModel):
@@ -1060,53 +1076,124 @@ def task_detail(task_id: str, request: Request) -> dict[str, Any]:
 
 
 @router.post("/home-scans", status_code=202)
-def start_home_scan(request: HomeScanRequest) -> dict[str, Any]:
+def start_home_scan(payload: HomeScanRequest, request: Request) -> dict[str, Any]:
     """创建可取消的 home 后台扫描，相同幂等键复用原任务。"""
 
     try:
-        return home_scan_manager.start(
-            request.username,
-            request.idempotency_key,
-            request.max_depth,
-            request.max_nodes,
+        return request.app.state.home_scans.start(
+            payload.username,
+            payload.idempotency_key,
+            payload.max_depth,
+            payload.max_nodes,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/home-scans/{task_id}")
-def get_home_scan(task_id: str) -> dict[str, Any]:
+def get_home_scan(task_id: str, request: Request) -> dict[str, Any]:
     """返回 home 扫描任务和完成后的 treemap 数据。"""
 
     try:
-        return home_scan_manager.get(task_id)
+        return request.app.state.home_scans.get(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="扫描任务不存在") from exc
 
 
 @router.post("/home-scans/{task_id}/cancel")
-def cancel_home_scan(task_id: str) -> dict[str, Any]:
+def cancel_home_scan(task_id: str, request: Request) -> dict[str, Any]:
     """幂等请求取消 home 扫描。"""
 
     try:
-        return home_scan_manager.cancel(task_id)
+        return request.app.state.home_scans.cancel(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="扫描任务不存在") from exc
 
 
 @router.get("/home-scans/{task_id}/events")
-def home_scan_events(task_id: str) -> StreamingResponse:
+def home_scan_events(task_id: str, request: Request) -> StreamingResponse:
     """以 SSE 推送扫描进度，仍由统一启动令牌中间件保护。"""
 
     try:
-        home_scan_manager.get(task_id)
+        request.app.state.home_scans.get(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="扫描任务不存在") from exc
 
     async def events() -> AsyncIterator[str]:
         previous = ""
         while True:
-            snapshot = home_scan_manager.get(task_id)
+            snapshot = request.app.state.home_scans.get(task_id)
+            payload = json.dumps(snapshot, ensure_ascii=False)
+            if payload != previous:
+                yield f"event: progress\ndata: {payload}\n\n"
+                previous = payload
+            if snapshot["state"] in TERMINAL_STATES:
+                break
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/user-storage-scans", status_code=202)
+def start_user_storage_scan(payload: UserStorageScanRequest, request: Request) -> dict[str, Any]:
+    """在当前挂载点内启动按 UID 汇总的限速后台扫描。"""
+
+    allowed = {str(Path(item["mountpoint"]).resolve()) for item in mount_points()}
+    try:
+        return request.app.state.user_storage_scans.start(
+            payload.identity,
+            payload.mountpoint,
+            payload.idempotency_key,
+            payload.max_depth,
+            payload.max_nodes,
+            payload.include_hidden,
+            payload.cross_filesystems,
+            payload.include_unreadable,
+            payload.throttle_milliseconds,
+            payload.snapshot_ttl_seconds,
+            allowed_mountpoints=allowed,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/user-storage-scans/{task_id}")
+def get_user_storage_scan(task_id: str, request: Request) -> dict[str, Any]:
+    """返回用户占用扫描进度和完成快照。"""
+
+    try:
+        return request.app.state.user_storage_scans.get(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="扫描任务不存在") from exc
+
+
+@router.post("/user-storage-scans/{task_id}/cancel")
+def cancel_user_storage_scan(task_id: str, request: Request) -> dict[str, Any]:
+    """幂等请求取消用户占用扫描。"""
+
+    try:
+        return request.app.state.user_storage_scans.cancel(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="扫描任务不存在") from exc
+
+
+@router.get("/user-storage-scans/{task_id}/events")
+def user_storage_scan_events(task_id: str, request: Request) -> StreamingResponse:
+    """以 SSE 推送用户占用扫描进度。"""
+
+    try:
+        request.app.state.user_storage_scans.get(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="扫描任务不存在") from exc
+
+    async def events() -> AsyncIterator[str]:
+        previous = ""
+        while True:
+            snapshot = request.app.state.user_storage_scans.get(task_id)
             payload = json.dumps(snapshot, ensure_ascii=False)
             if payload != previous:
                 yield f"event: progress\ndata: {payload}\n\n"

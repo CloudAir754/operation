@@ -13,6 +13,7 @@ const ProcessPanel = lazy(() => import('./ProcessPanel'))
 const FileTransferPanel = lazy(() => import('./FileTransferPanel'))
 const HomeMigrationPanel = lazy(() => import('./HomeMigrationPanel'))
 const DiskInitializationPanel = lazy(() => import('./DiskInitializationPanel'))
+const UserStorageScanPanel = lazy(() => import('./UserStorageScanPanel'))
 
 function bytes(value: number | null): string {
   if (value === null) return 'N/A'
@@ -388,10 +389,11 @@ export default function App() {
               {homeScan.error && <Alert type="error" showIcon message={homeScan.error} />}
             </Space>}
             {homeScan?.result && <>
-              <Alert className="notice" type="info" message={`快照时间 ${new Date(homeScan.result.scanned_at).toLocaleString()}；${homeScan.result.hardlink_policy}`} />
-              <Suspense fallback={<Spin tip="正在加载 treemap" />}><TreemapView root={homeScan.result.tree} /></Suspense>
+              <Alert className="notice" type={homeScan.snapshot_expired ? 'warning' : 'info'} message={homeScan.snapshot_expired ? '扫描快照已过期，不再作为实时结果展示' : `快照时间 ${new Date(homeScan.result.scanned_at).toLocaleString()}；有效至 ${new Date(homeScan.result.expires_at).toLocaleString()}；${homeScan.result.hardlink_policy}`} />
+              {!homeScan.snapshot_expired && <Suspense fallback={<Spin tip="正在加载 treemap" />}><TreemapView root={homeScan.result.tree} scannedAt={homeScan.result.scanned_at} expiresAt={homeScan.result.expires_at} /></Suspense>}
             </>}
           </Card></Col>}
+          <Col span={24}><Suspense fallback={<Spin tip="正在加载用户占用扫描" />}><UserStorageScanPanel token={sessionToken.current} users={users} mounts={overview?.mounts ?? []} /></Suspense></Col>
           <Col span={24}><Suspense fallback={<Spin tip="正在加载文件迁移工具" />}><FileTransferPanel token={sessionToken.current} privileged={Boolean(privileged?.available)} /></Suspense></Col>
           <Col span={24}><Suspense fallback={<Spin tip="正在加载 home 迁移工具" />}><HomeMigrationPanel token={sessionToken.current} privileged={Boolean(privileged?.available)} users={users} /></Suspense></Col>
           <Col span={24}><Suspense fallback={<Spin tip="正在加载磁盘初始化工具" />}><DiskInitializationPanel token={sessionToken.current} privileged={Boolean(privileged?.available)} devices={storage?.devices ?? []} /></Suspense></Col>

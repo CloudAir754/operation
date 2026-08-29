@@ -13,7 +13,12 @@ from sqlalchemy import create_engine, delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from lab_ops_panel.database import OperationLogRecord, TaskRecord, TaskStepRecord
+from lab_ops_panel.database import (
+    OperationLogRecord,
+    ScanSnapshotRecord,
+    TaskRecord,
+    TaskStepRecord,
+)
 
 SENSITIVE_KEYS = frozenset(
     {"password", "private_key", "credential", "credentials", "secret", "token", "content"}
@@ -22,7 +27,7 @@ TASK_TRANSITIONS = {
     "queued": frozenset({"prechecking", "cancelled", "interrupted"}),
     "prechecking": frozenset({"waiting_confirmation", "running", "failed", "interrupted"}),
     "waiting_confirmation": frozenset({"running", "cancelled", "failed", "interrupted"}),
-    "running": frozenset({"succeeded", "failed", "rollback_pending", "interrupted"}),
+    "running": frozenset({"succeeded", "failed", "cancelled", "rollback_pending", "interrupted"}),
     "interrupted": frozenset({"running", "rollback_pending", "failed"}),
     "rollback_pending": frozenset({"rolled_back", "failed", "interrupted"}),
     "succeeded": frozenset(),
@@ -131,6 +136,42 @@ class TaskRepository:
                 )
             )
             return [self._public(session, task) for task in tasks]
+
+    def save_scan_snapshot(self, task_id: str, result: dict[str, Any]) -> None:
+        """保存不含文件内容的空间树，并先清除已过期快照。"""
+
+        created_at = datetime.fromisoformat(result["scanned_at"])
+        expires_at = datetime.fromisoformat(result["expires_at"])
+        summary = {key: value for key, value in result.items() if key != "tree"}
+        with Session(self.engine) as session:
+            if session.get(TaskRecord, task_id) is None:
+                raise KeyError(task_id)
+            session.execute(
+                delete(ScanSnapshotRecord).where(ScanSnapshotRecord.expires_at <= created_at)
+            )
+            session.add(
+                ScanSnapshotRecord(
+                    id=uuid.uuid4().hex,
+                    task_id=task_id,
+                    scope=result["scope"],
+                    created_at=created_at,
+                    expires_at=expires_at,
+                    summary=summary,
+                    tree=result["tree"],
+                )
+            )
+            session.commit()
+
+    def cleanup_scan_snapshots(self, now: datetime | None = None) -> int:
+        """删除过期扫描树，避免路径元数据和 SQLite 空间无限保留。"""
+
+        cutoff = now or datetime.now(UTC)
+        with Session(self.engine) as session:
+            result = session.execute(
+                delete(ScanSnapshotRecord).where(ScanSnapshotRecord.expires_at <= cutoff)
+            )
+            session.commit()
+            return result.rowcount
 
     def transition(self, task_id: str, state: str, error: str | None = None) -> dict[str, Any]:
         """按显式状态图转换任务，拒绝跳步和终态重入。"""

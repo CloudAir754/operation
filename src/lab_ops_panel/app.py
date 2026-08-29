@@ -23,6 +23,7 @@ from lab_ops_panel.application.user_deletion import UserDeletionManager
 from lab_ops_panel.config import Settings, ensure_unprivileged
 from lab_ops_panel.database import initialize_database
 from lab_ops_panel.infrastructure.privileged import PrivilegedExecutor
+from lab_ops_panel.infrastructure.scans import HomeScanManager, UserStorageScanManager
 from lab_ops_panel.infrastructure.tasks import TaskRepository
 
 
@@ -38,7 +39,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.database_path = initialize_database(active_settings.data_dir)
         app.state.tasks = TaskRepository(app.state.database_path)
         app.state.cleaned_operation_logs = app.state.tasks.cleanup_operation_logs()
+        app.state.cleaned_scan_snapshots = app.state.tasks.cleanup_scan_snapshots()
         app.state.interrupted_tasks = app.state.tasks.mark_running_interrupted()
+        app.state.home_scans = HomeScanManager(app.state.tasks, "home_scan")
+        app.state.user_storage_scans = UserStorageScanManager(app.state.tasks, "user_storage_scan")
         app.state.privileged = PrivilegedExecutor()
         app.state.user_creation = UserCreationManager(
             app.state.tasks, app.state.privileged, active_settings.data_dir
@@ -55,6 +59,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            app.state.user_storage_scans.close()
+            app.state.home_scans.close()
             app.state.disk_initialization.close()
             app.state.home_migration.close()
             app.state.file_transfer.close()

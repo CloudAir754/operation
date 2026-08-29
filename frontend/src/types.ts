@@ -180,6 +180,7 @@ export interface ScanNode {
   unreadable: boolean
   cross_filesystem: boolean
   hardlink_duplicate: boolean
+  changed_during_scan: boolean
   children: ScanNode[]
   error?: string
 }
@@ -190,20 +191,39 @@ export interface HomeScanTask {
   root: string
   max_depth: number
   max_nodes: number
+  target_uid: number | null
+  include_hidden: boolean
+  cross_filesystems: boolean
+  include_unreadable: boolean
+  throttle_milliseconds: number
   state: 'queued' | 'running' | 'completed' | 'cancelled' | 'failed'
   nodes_scanned: number
   started_at: string | null
   finished_at: string | null
   error: string | null
+  snapshot_expired: boolean
   result: null | {
     scanned_at: string
+    expires_at: string
     scope: string
-    cross_filesystems: false
+    target_uid: number | null
+    cross_filesystems: boolean
     hardlink_policy: string
     nodes_scanned: number
+    unreadable_count: number
+    changed_count: number
+    cross_filesystem_count: number
+    largest_paths: Array<{
+      path: string
+      logical_size: number
+      allocated_size: number
+      owner_uid: number
+    }>
     tree: ScanNode
   }
 }
+
+export type UserStorageScanTask = HomeScanTask
 
 export interface UserImportPreview {
   header_detected: boolean

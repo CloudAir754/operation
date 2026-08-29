@@ -2,7 +2,7 @@
 
 一个按需启动、只管理当前 Ubuntu 机器的本地运维面板。管理员从终端启动程序，在浏览器中完成本机账号、密码、SSH 公钥、sudo、磁盘、文件和资源管理，操作结束后即可退出。
 
-> 当前仓库已完成阶段 1、2、3，并进入阶段 4。账号管理、受控文件迁移和本地 ext4 home 跨盘迁移仅在管理员另行安装可信特权助手后开放；磁盘初始化仍在开发中。
+> 当前仓库已完成阶段 1 至 4 的功能实现。账号管理、受控文件迁移、本地 ext4 home 跨盘迁移和空盘 GPT + ext4 初始化仅在管理员另行安装可信特权助手后开放；Ubuntu 多版本和 NVIDIA 实机兼容性仍需在对应环境持续验证。
 
 ## 快速开始
 
@@ -28,7 +28,7 @@ labops_uv=$(command -v uv)
 sudo /usr/bin/python3 scripts/install_privileged_helper.py "$labops_user" --uv "$labops_uv"
 ```
 
-安装器只支持 `amd64/x86_64`。它用 `uv tool` 在 `/usr/local/lib/labopspanel-tools` 创建 root 控制的隔离环境，将非符号链接入口原子安装到 `/usr/local/libexec/labopspanel-privileged`，并为指定启动用户写入只允许账号创建、SSH 导入、sudo 授予/撤销、PAM 修改/恢复、端口查询、受控进程终止、用户删除、文件迁移，以及 home 迁移预检/执行/状态/回退/清理十九个固定动作的独立 sudoers 文件。安装前、临时规则和安装后均运行 `visudo`；失败会恢复旧规则。项目升级后应重新运行安装器，使 root 助手与 Web 代码版本一致。
+安装器只支持 `amd64/x86_64`。它用 `uv tool` 在 `/usr/local/lib/labopspanel-tools` 创建 root 控制的隔离环境，将非符号链接入口原子安装到 `/usr/local/libexec/labopspanel-privileged`，并为指定启动用户写入只允许账号创建、SSH 导入、sudo 授予/撤销、PAM 修改/恢复、端口查询、受控进程终止、用户删除、文件迁移、home 迁移，以及磁盘初始化计划/执行/状态二十二个固定动作的独立 sudoers 文件。安装前、临时规则和安装后均运行 `visudo`；失败会恢复旧规则。项目升级后应重新运行安装器，使 root 助手与 Web 代码版本一致。
 
 当前原型提供：
 
@@ -39,6 +39,7 @@ sudo /usr/bin/python3 scripts/install_privileged_helper.py "$labops_user" --uv "
 - 可取消、默认不跨文件系统、不跟随符号链接的 home 后台扫描及 treemap；
 - 受控部分文件迁移，先复制并校验元数据、原子发布目标，再由管理员独立确认清理源路径；
 - 可恢复的 ext4 home 跨盘迁移，按 UID 冻结进程、原地保留备份、复制校验、链接切换、用户身份试验，并支持中断恢复、回退和独立人工清理；
+- 空盘 GPT + ext4 初始化，纯预览命令计划、稳定设备身份和序列号确认、系统盘/挂载/签名/holder 拒绝、UUID `fstab` 原子更新、挂载验证及失败恢复；
 - 回环监听限制和所有 API 的启动会话令牌校验。
 
 ## 一、项目边界

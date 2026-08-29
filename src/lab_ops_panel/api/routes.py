@@ -192,6 +192,27 @@ class HomeMigrationActionRequest(AccountActionRequest):
     confirmation: str = Field(max_length=150)
 
 
+class DiskInitializationPlanRequest(BaseModel):
+    """空盘 GPT + ext4 纯预览参数。"""
+
+    stable_identity: str = Field(min_length=5, max_length=500)
+    label: str = Field(min_length=1, max_length=16)
+    mountpoint: str = Field(min_length=2, max_length=1000)
+    mount_options: list[str] = Field(default=["defaults", "nofail"], min_length=1, max_length=5)
+
+
+class DiskInitializationExecuteRequest(DiskInitializationPlanRequest, AccountActionRequest):
+    """携带序列号二次确认的磁盘初始化执行参数。"""
+
+    confirmed_serial: str = Field(min_length=1, max_length=200)
+
+
+class DiskInitializationResumeRequest(BaseModel):
+    """中断恢复时重新输入序列号，不将其写入任务数据库。"""
+
+    confirmed_serial: str = Field(min_length=1, max_length=200)
+
+
 class SshKeyPreviewRequest(BaseModel):
     """SSH 公钥粘贴预览参数。"""
 
@@ -758,6 +779,80 @@ def get_home_migration_status(migration_id: str, http_request: Request) -> dict[
     try:
         return http_request.app.state.privileged.execute(
             "home-migration-status", {"migration_id": migration_id}
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/disk-initializations/plan")
+def preview_disk_initialization(
+    request: DiskInitializationPlanRequest, http_request: Request
+) -> dict[str, Any]:
+    """通过 root 只读事实生成命令计划，不执行 wipefs、分区、格式化或挂载。"""
+
+    _require_privileged_helper(http_request)
+    try:
+        return http_request.app.state.privileged.execute(
+            "disk-initialization-plan", request.model_dump()
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/disk-initializations/execute", status_code=202)
+def start_disk_initialization(
+    request: DiskInitializationExecuteRequest, http_request: Request
+) -> dict[str, Any]:
+    """再次预检并核对完整序列号后启动可恢复破坏性任务。"""
+
+    _require_privileged_helper(http_request)
+    plan_payload = request.model_dump(exclude={"confirmed_serial", "idempotency_key"})
+    try:
+        plan = http_request.app.state.privileged.execute("disk-initialization-plan", plan_payload)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if request.confirmed_serial != plan.get("serial"):
+        raise HTTPException(status_code=400, detail="磁盘序列号二次确认不匹配")
+    try:
+        return http_request.app.state.disk_initialization.start(
+            request.stable_identity,
+            request.confirmed_serial,
+            request.label,
+            request.mountpoint,
+            request.mount_options,
+            request.idempotency_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/tasks/{task_id}/disk-initialization-resume", status_code=202)
+def resume_disk_initialization(
+    task_id: str, request: DiskInitializationResumeRequest, http_request: Request
+) -> dict[str, Any]:
+    """再次输入序列号后恢复同一 interrupted 磁盘任务。"""
+
+    _require_privileged_helper(http_request)
+    try:
+        return http_request.app.state.disk_initialization.resume(task_id, request.confirmed_serial)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/disk-initializations/{operation_id}")
+def get_disk_initialization_status(operation_id: str, http_request: Request) -> dict[str, Any]:
+    """读取 root 私有日志中的磁盘初始化真实阶段。"""
+
+    _require_privileged_helper(http_request)
+    try:
+        task = http_request.app.state.tasks.get(operation_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="磁盘初始化任务不存在") from exc
+    if task["kind"] != "disk_initialization":
+        raise HTTPException(status_code=404, detail="任务不是磁盘初始化")
+    try:
+        return http_request.app.state.privileged.execute(
+            "disk-initialization-status", {"operation_id": operation_id}
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

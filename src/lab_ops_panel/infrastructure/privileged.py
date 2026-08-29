@@ -32,6 +32,9 @@ ALLOWED_ACTIONS = frozenset(
         "home-migration-status",
         "home-migration-rollback",
         "home-migration-cleanup",
+        "disk-initialization-plan",
+        "disk-initialization-execute",
+        "disk-initialization-status",
     }
 )
 ACTION_TIMEOUTS = {
@@ -46,6 +49,9 @@ ACTION_TIMEOUTS = {
     "home-migration-status": 120,
     "home-migration-rollback": 3600,
     "home-migration-cleanup": 7200,
+    "disk-initialization-plan": 300,
+    "disk-initialization-execute": 7200,
+    "disk-initialization-status": 120,
 }
 
 

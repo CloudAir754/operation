@@ -13,6 +13,11 @@ from typing import Any
 from lab_ops_panel.domain.ssh_keys import parse_public_key
 from lab_ops_panel.domain.user_imports import USERNAME
 from lab_ops_panel.infrastructure.authorized_keys import import_authorized_keys
+from lab_ops_panel.infrastructure.disk_initialization import (
+    disk_initialization_plan,
+    disk_initialization_status,
+    execute_disk_initialization,
+)
 from lab_ops_panel.infrastructure.file_transfer import (
     cleanup_file_transfer_source,
     execute_file_transfer,
@@ -231,6 +236,38 @@ def _dispatch(action: str, payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(migration_id, str):
             raise ValueError("home 迁移备份清理参数无效")
         return cleanup_home_migration_backup(migration_id)
+    if action in {"disk-initialization-plan", "disk-initialization-execute"}:
+        stable_identity = payload.get("stable_identity")
+        label = payload.get("label")
+        mountpoint = payload.get("mountpoint")
+        mount_options = payload.get("mount_options")
+        if (
+            not isinstance(stable_identity, str)
+            or not isinstance(label, str)
+            or not isinstance(mountpoint, str)
+            or not isinstance(mount_options, list)
+            or not all(isinstance(value, str) for value in mount_options)
+        ):
+            raise ValueError("磁盘初始化参数无效")
+        if action == "disk-initialization-plan":
+            return disk_initialization_plan(stable_identity, label, mountpoint, mount_options)
+        confirmed_serial = payload.get("confirmed_serial")
+        operation_id = payload.get("operation_id")
+        if not isinstance(confirmed_serial, str) or not isinstance(operation_id, str):
+            raise ValueError("磁盘初始化确认参数无效")
+        return execute_disk_initialization(
+            stable_identity,
+            confirmed_serial,
+            label,
+            mountpoint,
+            mount_options,
+            operation_id,
+        )
+    if action == "disk-initialization-status":
+        operation_id = payload.get("operation_id")
+        if not isinstance(operation_id, str):
+            raise ValueError("磁盘初始化状态参数无效")
+        return disk_initialization_status(operation_id)
     if action == "pam-update":
         changes = payload.get("changes")
         if not isinstance(changes, dict):

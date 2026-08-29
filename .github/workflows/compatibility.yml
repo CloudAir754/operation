@@ -1,0 +1,68 @@
+name: Ubuntu amd64 兼容性验证
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    name: Ubuntu ${{ matrix.ubuntu }} amd64
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:${{ matrix.ubuntu }}
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu:
+          - "22.04"
+          - "24.04"
+          - "26.04"
+
+    steps:
+      - name: 安装最小系统测试依赖
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install --yes ca-certificates curl git passwd rsync sudo
+          useradd --create-home --shell /bin/bash labops-ci
+
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.3"
+          enable-cache: true
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 准备非 root 测试账号
+        run: chown -R labops-ci:labops-ci "$GITHUB_WORKSPACE"
+
+      - name: 安装 Python 3.12 和项目依赖
+        run: |
+          sudo -u labops-ci -H env PATH="$PATH" uv python install 3.12
+          sudo -u labops-ci -H env PATH="$PATH" uv sync --extra dev
+
+      - name: 验证 Python 格式、静态检查和测试
+        run: |
+          sudo -u labops-ci -H env PATH="$PATH" uv run ruff check .
+          sudo -u labops-ci -H env PATH="$PATH" uv run ruff format --check .
+          sudo -u labops-ci -H env PATH="$PATH" uv run pytest
+
+      - name: 安装并验证前端
+        working-directory: frontend
+        run: |
+          sudo -u labops-ci -H env PATH="$PATH" npm ci
+          sudo -u labops-ci -H env PATH="$PATH" npm run typecheck
+          sudo -u labops-ci -H env PATH="$PATH" npm test -- --run
+          sudo -u labops-ci -H env PATH="$PATH" npm run build

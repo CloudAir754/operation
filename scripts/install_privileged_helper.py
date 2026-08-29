@@ -35,6 +35,9 @@ ACTIONS = (
     "home-migration-status",
     "home-migration-rollback",
     "home-migration-cleanup",
+    "disk-initialization-plan",
+    "disk-initialization-execute",
+    "disk-initialization-status",
 )
 HELPER = Path("/usr/local/libexec/labopspanel-privileged")
 TOOL_DIRECTORY = Path("/usr/local/lib/labopspanel-tools")

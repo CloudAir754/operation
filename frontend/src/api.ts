@@ -1,4 +1,4 @@
-import type { GpuSnapshot, HomeMigrationStatus, HomeScanTask, Overview, PamPolicyChangePreview, PamPolicyChangeValues, PamPolicySnapshot, PasswordPolicySummary, PasswordPolicyValues, PersistentTask, PortUsageSnapshot, PrivilegedCapability, ResourceSnapshot, StorageSnapshot, UserAccount, UserImportPreview } from './types'
+import type { DiskInitializationPlan, DiskInitializationStatus, GpuSnapshot, HomeMigrationStatus, HomeScanTask, Overview, PamPolicyChangePreview, PamPolicyChangeValues, PamPolicySnapshot, PasswordPolicySummary, PasswordPolicyValues, PersistentTask, PortUsageSnapshot, PrivilegedCapability, ResourceSnapshot, StorageSnapshot, UserAccount, UserImportPreview } from './types'
 
 async function errorDetail(response: Response, fallback: string): Promise<string> {
   const body = await response.json().catch(() => null) as { detail?: string } | null
@@ -522,4 +522,55 @@ export async function cleanupHomeMigration(
   })
   if (!response.ok) throw new Error(await errorDetail(response, '原 home 备份清理启动失败。'))
   return response.json() as Promise<PersistentTask>
+}
+
+export async function planDiskInitialization(
+  token: string,
+  values: { stable_identity: string, label: string, mountpoint: string, mount_options: string[] },
+): Promise<DiskInitializationPlan> {
+  const response = await fetch('/api/v1/disk-initializations/plan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify(values),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '磁盘初始化计划生成失败。'))
+  return response.json() as Promise<DiskInitializationPlan>
+}
+
+export async function executeDiskInitialization(
+  token: string,
+  values: { stable_identity: string, confirmed_serial: string, label: string, mountpoint: string, mount_options: string[] },
+): Promise<PersistentTask> {
+  const response = await fetch('/api/v1/disk-initializations/execute', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({ ...values, idempotency_key: crypto.randomUUID() }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '磁盘初始化任务启动失败。'))
+  return response.json() as Promise<PersistentTask>
+}
+
+export async function resumeDiskInitialization(
+  token: string,
+  taskId: string,
+  confirmedSerial: string,
+): Promise<PersistentTask> {
+  const response = await fetch(`/api/v1/tasks/${taskId}/disk-initialization-resume`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({ confirmed_serial: confirmedSerial }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '磁盘初始化恢复失败。'))
+  return response.json() as Promise<PersistentTask>
+}
+
+export async function loadDiskInitializationStatus(
+  token: string,
+  operationId: string,
+): Promise<DiskInitializationStatus> {
+  const response = await fetch(`/api/v1/disk-initializations/${operationId}`, {
+    headers: { 'X-LabOps-Token': token },
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '读取磁盘初始化阶段失败。'))
+  return response.json() as Promise<DiskInitializationStatus>
 }

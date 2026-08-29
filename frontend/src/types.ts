@@ -321,6 +321,39 @@ export interface HomeMigrationStatus {
   observation_started_at?: string
 }
 
+export interface DiskInitializationPlan {
+  stable_identity: string
+  device_path: string
+  command_device: string
+  model: string | null
+  serial: string
+  wwn: string | null
+  size: number
+  label: string
+  mountpoint: string
+  mount_options: string
+  commands: string[][]
+  fstab_preview: string
+  destructive: true
+}
+
+export interface DiskInitializationStatus {
+  operation_id: string
+  phase: string
+  stable_identity: string
+  serial: string
+  model: string | null
+  size: number
+  label: string
+  mountpoint: string
+  mount_options: string
+  partition: string | null
+  filesystem_uuid: string | null
+  failed_phase: string | null
+  failure: string | null
+  fstab_restored: boolean | null
+}
+
 export interface PortUsageSnapshot {
   port: number
   protocol: 'tcp' | 'udp' | 'any'

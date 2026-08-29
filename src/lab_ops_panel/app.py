@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from lab_ops_panel.api.routes import router
 from lab_ops_panel.application.account_access import AccountAccessManager
+from lab_ops_panel.application.disk_initialization import DiskInitializationManager
 from lab_ops_panel.application.file_transfer import FileTransferManager
 from lab_ops_panel.application.home_migration import HomeMigrationManager
 from lab_ops_panel.application.pam_policy import PamPolicyManager
@@ -48,9 +49,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.user_deletion = UserDeletionManager(app.state.tasks, app.state.privileged)
         app.state.file_transfer = FileTransferManager(app.state.tasks, app.state.privileged)
         app.state.home_migration = HomeMigrationManager(app.state.tasks, app.state.privileged)
+        app.state.disk_initialization = DiskInitializationManager(
+            app.state.tasks, app.state.privileged
+        )
         try:
             yield
         finally:
+            app.state.disk_initialization.close()
             app.state.home_migration.close()
             app.state.file_transfer.close()
             app.state.user_deletion.close()

@@ -747,3 +747,99 @@ def test_home_migration_requires_bound_preflight_and_confirmations(
     assert cleaned.status_code == 202
     assert status.status_code == 200 and status.json()["phase"] == "copying"
     assert [name for name, _ in calls] == ["execute", "resume", "rollback", "cleanup"]
+
+
+def test_disk_initialization_requires_plan_and_exact_serial_confirmation(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    """磁盘命令计划可预览，执行和恢复均要求序列号且不交给任务参数。"""
+
+    monkeypatch.setattr(
+        "lab_ops_panel.api.routes.helper_capability",
+        lambda path: {"available": True, "reason": None, "path": str(path)},
+    )
+    response_task = {"id": "response", "state": "queued", "steps": []}
+    calls = []
+    client, headers = _client(tmp_path)
+    with client:
+        plan = {
+            "stable_identity": "serial:SERIAL-REDACTED",
+            "serial": "SERIAL-REDACTED",
+            "model": "构造磁盘",
+            "size": 1000,
+            "label": "research",
+            "mountpoint": "/mnt/research",
+            "mount_options": "defaults,nofail",
+            "commands": [["/usr/sbin/parted", "--script"]],
+            "fstab_preview": "UUID=<new> /mnt/research ext4 defaults,nofail 0 2",
+            "destructive": True,
+        }
+
+        def privileged_execute(action, payload):  # type: ignore[no-untyped-def]
+            if action == "disk-initialization-plan":
+                return plan
+            return {"operation_id": payload["operation_id"], "phase": "partitioning"}
+
+        client.app.state.privileged.execute = privileged_execute
+        manager = client.app.state.disk_initialization
+        manager.start = lambda *args: calls.append(("start", args)) or response_task
+        manager.resume = lambda *args: calls.append(("resume", args)) or response_task
+        planned = client.post(
+            "/api/v1/disk-initializations/plan",
+            headers=headers,
+            json={
+                "stable_identity": "serial:SERIAL-REDACTED",
+                "label": "research",
+                "mountpoint": "/mnt/research",
+                "mount_options": ["defaults", "nofail"],
+            },
+        )
+        rejected = client.post(
+            "/api/v1/disk-initializations/execute",
+            headers=headers,
+            json={
+                "stable_identity": "serial:SERIAL-REDACTED",
+                "confirmed_serial": "WRONG",
+                "label": "research",
+                "mountpoint": "/mnt/research",
+                "mount_options": ["defaults", "nofail"],
+                "idempotency_key": "disk-execute-key-123",
+            },
+        )
+        accepted = client.post(
+            "/api/v1/disk-initializations/execute",
+            headers=headers,
+            json={
+                "stable_identity": "serial:SERIAL-REDACTED",
+                "confirmed_serial": "SERIAL-REDACTED",
+                "label": "research",
+                "mountpoint": "/mnt/research",
+                "mount_options": ["defaults", "nofail"],
+                "idempotency_key": "disk-execute-key-123",
+            },
+        )
+        task = client.app.state.tasks.create_or_get(
+            "disk_initialization",
+            "disk-record-key-123",
+            {
+                "stable_identity": "serial:SERIAL-REDACTED",
+                "label": "research",
+                "mountpoint": "/mnt/research",
+                "mount_options": ["defaults", "nofail"],
+            },
+            "serial:SERIAL-REDACTED",
+            ["分区"],
+        )
+        resumed = client.post(
+            f"/api/v1/tasks/{task['id']}/disk-initialization-resume",
+            headers=headers,
+            json={"confirmed_serial": "SERIAL-REDACTED"},
+        )
+        status = client.get(f"/api/v1/disk-initializations/{task['id']}", headers=headers)
+
+    assert planned.status_code == 200 and planned.json()["destructive"] is True
+    assert rejected.status_code == 400
+    assert accepted.status_code == resumed.status_code == 202
+    assert status.status_code == 200 and status.json()["phase"] == "partitioning"
+    assert [name for name, _ in calls] == ["start", "resume"]
+    assert calls[0][1][1] == "SERIAL-REDACTED"

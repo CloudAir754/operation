@@ -6,7 +6,18 @@
 
 ## 快速开始
 
-需要 Python 3.12、`uv`、Node.js 和 npm。首次运行先安装依赖并构建前端：
+需要 Python 3.12、`uv`、Node.js 和 npm。新机器如果尚未安装 `uv`，先使用 Astral 官方安装器完成用户级安装并加载 PATH：
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source "$HOME/.local/bin/env"
+uv --version
+uv python install 3.12
+```
+
+安装器通常会自动更新 shell 配置；如果当前终端仍提示找不到 `uv`，可先执行 `export PATH="$HOME/.local/bin:$PATH"`，或重新打开终端。项目要求 Python `>=3.12,<3.13`，`uv` 也会在同步时自动下载缺失的兼容 Python，但显式安装 3.12 便于在首次同步前确认环境。
+
+进入项目目录后安装依赖并构建前端：
 
 ```bash
 uv sync --extra dev

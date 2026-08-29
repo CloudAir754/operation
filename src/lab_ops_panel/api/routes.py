@@ -165,6 +165,33 @@ class FileTransferCleanupRequest(AccountActionRequest):
     confirmation: str = Field(min_length=2, max_length=1000)
 
 
+class HomeMigrationPreflightRequest(AccountActionRequest):
+    """home 迁移目标、安全余量和可选内容校验。"""
+
+    target_parent: str = Field(min_length=2, max_length=1000)
+    safety_margin_percent: int = Field(default=10, ge=5, le=100)
+    verify_contents: bool = False
+
+
+class HomeMigrationExecuteRequest(AccountActionRequest):
+    """引用成功预检并确认首次执行。"""
+
+    preflight_task_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    confirmation: str = Field(max_length=100)
+
+
+class HomeMigrationResumeRequest(BaseModel):
+    """显式恢复原 interrupted 执行任务。"""
+
+    confirmation: str = Field(max_length=100)
+
+
+class HomeMigrationActionRequest(AccountActionRequest):
+    """home 回退或备份清理的明确确认。"""
+
+    confirmation: str = Field(max_length=150)
+
+
 class SshKeyPreviewRequest(BaseModel):
     """SSH 公钥粘贴预览参数。"""
 
@@ -642,6 +669,136 @@ def cleanup_file_transfer_source_api(
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=409, detail="文件复制结果不完整") from exc
+
+
+def _home_migration_preflight_task(request: Request, migration_id: str) -> dict[str, Any]:
+    """迁移 ID 即预检任务 ID，统一读取其账号和目标绑定参数。"""
+
+    task = _successful_task(request, migration_id, "home_migration_preflight")
+    if task["id"] != migration_id:
+        raise HTTPException(status_code=409, detail="home 迁移 ID 与预检任务不匹配")
+    return task
+
+
+@router.post("/users/{username}/home-migrations/preflight", status_code=202)
+def start_home_migration_preflight(
+    username: str, request: HomeMigrationPreflightRequest, http_request: Request
+) -> dict[str, Any]:
+    """为普通本机账号启动 ext4 home 迁移预检。"""
+
+    _require_privileged_helper(http_request)
+    account = _interactive_local_account(username)
+    uid = int(account["uid"])
+    if uid == os.getuid():
+        raise HTTPException(status_code=403, detail="拒绝迁移正在运行 LabOpsPanel 的用户")
+    try:
+        return http_request.app.state.home_migration.start_preflight(
+            username,
+            uid,
+            str(account["home"]),
+            request.target_parent,
+            request.safety_margin_percent,
+            request.verify_contents,
+            request.idempotency_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/home-migrations/execute", status_code=202)
+def start_home_migration_execute(
+    request: HomeMigrationExecuteRequest, http_request: Request
+) -> dict[str, Any]:
+    """十分钟内预检成功并输入绑定用户名后启动可恢复迁移。"""
+
+    _require_privileged_helper(http_request)
+    preflight = _home_migration_preflight_task(http_request, request.preflight_task_id)
+    username = str(preflight["parameters"]["username"])
+    if request.confirmation != f"迁移home:{username}":
+        raise HTTPException(status_code=400, detail="home 迁移确认文本不匹配")
+    created_at = datetime.fromisoformat(preflight["created_at"])
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    if datetime.now(UTC) - created_at > timedelta(minutes=10):
+        raise HTTPException(status_code=409, detail="home 迁移预检已超过十分钟，请重新执行")
+    try:
+        return http_request.app.state.home_migration.start_execute(
+            preflight["id"], preflight["id"], request.idempotency_key
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/tasks/{task_id}/home-migration-resume", status_code=202)
+def resume_home_migration(
+    task_id: str, request: HomeMigrationResumeRequest, http_request: Request
+) -> dict[str, Any]:
+    """明确确认后恢复原 interrupted 迁移执行任务。"""
+
+    _require_privileged_helper(http_request)
+    try:
+        task = http_request.app.state.tasks.get(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="home 迁移执行任务不存在") from exc
+    migration_id = str(task.get("parameters", {}).get("migration_id", ""))
+    if request.confirmation != f"继续home迁移:{migration_id}":
+        raise HTTPException(status_code=400, detail="home 迁移恢复确认文本不匹配")
+    try:
+        return http_request.app.state.home_migration.resume_execute(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/home-migrations/{migration_id}")
+def get_home_migration_status(migration_id: str, http_request: Request) -> dict[str, Any]:
+    """从 root 控制日志读取真实迁移阶段，用于中断恢复判断。"""
+
+    _require_privileged_helper(http_request)
+    _home_migration_preflight_task(http_request, migration_id)
+    try:
+        return http_request.app.state.privileged.execute(
+            "home-migration-status", {"migration_id": migration_id}
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/home-migrations/{migration_id}/rollback", status_code=202)
+def rollback_home_migration_api(
+    migration_id: str, request: HomeMigrationActionRequest, http_request: Request
+) -> dict[str, Any]:
+    """输入绑定用户名后启动原 home 恢复。"""
+
+    _require_privileged_helper(http_request)
+    preflight = _home_migration_preflight_task(http_request, migration_id)
+    username = str(preflight["parameters"]["username"])
+    if request.confirmation != f"回退home:{username}":
+        raise HTTPException(status_code=400, detail="home 回退确认文本不匹配")
+    try:
+        return http_request.app.state.home_migration.start_rollback(
+            migration_id, username, request.idempotency_key
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/home-migrations/{migration_id}/cleanup", status_code=202)
+def cleanup_home_migration_api(
+    migration_id: str, request: HomeMigrationActionRequest, http_request: Request
+) -> dict[str, Any]:
+    """人工试验后输入绑定用户名，独立清理原 home 备份。"""
+
+    _require_privileged_helper(http_request)
+    preflight = _home_migration_preflight_task(http_request, migration_id)
+    username = str(preflight["parameters"]["username"])
+    if request.confirmation != f"清理原home备份:{username}":
+        raise HTTPException(status_code=400, detail="原 home 备份清理确认文本不匹配")
+    try:
+        return http_request.app.state.home_migration.start_cleanup(
+            migration_id, username, request.idempotency_key
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _require_privileged_helper(request: Request) -> None:

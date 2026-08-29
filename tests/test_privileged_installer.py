@@ -18,7 +18,7 @@ def test_sudoers_rule_only_allows_fixed_actions() -> None:
     content = MODULE.sudoers_content("operator", 1000)
 
     assert "operator ALL=(root) NOPASSWD:" in content
-    assert content.count("/usr/local/libexec/labopspanel-privileged") == 14
+    assert content.count("/usr/local/libexec/labopspanel-privileged") == 19
     assert "create-user" in content
     assert "ssh-import" in content
     assert "sudo-grant" in content
@@ -33,6 +33,11 @@ def test_sudoers_rule_only_allows_fixed_actions() -> None:
     assert "file-transfer-preflight" in content
     assert "file-transfer-copy" in content
     assert "file-transfer-cleanup" in content
+    assert "home-migration-preflight" in content
+    assert "home-migration-execute" in content
+    assert "home-migration-status" in content
+    assert "home-migration-rollback" in content
+    assert "home-migration-cleanup" in content
     assert " ALL\n" not in content
 
 

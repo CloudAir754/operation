@@ -11,6 +11,7 @@ const TreemapView = lazy(() => import('./TreemapView'))
 const UserImportPanel = lazy(() => import('./UserImportPanel'))
 const ProcessPanel = lazy(() => import('./ProcessPanel'))
 const FileTransferPanel = lazy(() => import('./FileTransferPanel'))
+const HomeMigrationPanel = lazy(() => import('./HomeMigrationPanel'))
 
 function bytes(value: number | null): string {
   if (value === null) return 'N/A'
@@ -263,7 +264,7 @@ export default function App() {
     <Layout className="page">
       <Header className="header"><Space><DesktopOutlined /><Typography.Title level={3}>LabOpsPanel</Typography.Title><Tag color="blue">阶段 3</Tag></Space></Header>
       <Content className="content">
-        <Alert className="notice" type={privileged?.available ? 'warning' : 'info'} showIcon message={privileged?.available ? '账号管理与受控文件迁移已启用；home 整体迁移和磁盘初始化仍在开发。' : '当前仅开放只读功能；系统写操作需要管理员另行安装可信特权助手。'} />
+        <Alert className="notice" type={privileged?.available ? 'warning' : 'info'} showIcon message={privileged?.available ? '账号管理、受控文件迁移与 ext4 home 跨盘迁移已启用；磁盘初始化仍在开发。' : '当前仅开放只读功能；系统写操作需要管理员另行安装可信特权助手。'} />
         <Row gutter={[16, 16]}>
           <Col xs={24} lg={12}><Card title={<Space><CloudServerOutlined />本机信息</Space>}>
             <Descriptions column={1} size="small" items={[
@@ -391,6 +392,7 @@ export default function App() {
             </>}
           </Card></Col>}
           <Col span={24}><Suspense fallback={<Spin tip="正在加载文件迁移工具" />}><FileTransferPanel token={sessionToken.current} privileged={Boolean(privileged?.available)} /></Suspense></Col>
+          <Col span={24}><Suspense fallback={<Spin tip="正在加载 home 迁移工具" />}><HomeMigrationPanel token={sessionToken.current} privileged={Boolean(privileged?.available)} users={users} /></Suspense></Col>
           <Col span={24}><Suspense fallback={<Spin tip="正在加载账号导入工具" />}><UserImportPanel token={sessionToken.current} /></Suspense></Col>
         </Row>
       </Content>

@@ -635,3 +635,115 @@ def test_file_transfer_copy_and_cleanup_bind_successful_tasks(tmp_path: Path, mo
         10,
         20,
     )
+
+
+def test_home_migration_requires_bound_preflight_and_confirmations(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    """home 迁移、恢复、回退和清理均绑定持久化任务及明确确认文本。"""
+
+    monkeypatch.setattr(
+        "lab_ops_panel.api.routes.helper_capability",
+        lambda path: {"available": True, "reason": None, "path": str(path)},
+    )
+    monkeypatch.setattr("lab_ops_panel.api.routes.minimum_regular_uid", lambda: 1000)
+    monkeypatch.setattr(
+        "lab_ops_panel.api.routes.local_users",
+        lambda: [
+            {
+                "username": "alice",
+                "uid": 2001,
+                "account_source": "local",
+                "home": "/home/alice",
+            }
+        ],
+    )
+    response_task = {"id": "response", "state": "queued", "steps": []}
+    calls = []
+    client, headers = _client(tmp_path)
+    with client:
+        repository = client.app.state.tasks
+        preflight = repository.create_or_get(
+            "home_migration_preflight",
+            "home-preview-record-123",
+            {
+                "username": "alice",
+                "uid": 2001,
+                "source": "/home/alice",
+                "target_parent": "/data/users",
+                "safety_margin_percent": 10,
+                "verify_contents": False,
+            },
+            "UID:2001",
+            ["账号", "容量", "日志"],
+        )
+        repository.transition(preflight["id"], "prechecking")
+        repository.transition(preflight["id"], "running")
+        repository.transition(preflight["id"], "succeeded")
+        execution = repository.create_or_get(
+            "home_migration_execute",
+            "home-execute-record-123",
+            {"migration_id": preflight["id"], "preflight_task_id": preflight["id"]},
+            preflight["id"],
+            ["执行"],
+        )
+        repository.transition(execution["id"], "prechecking")
+        repository.transition(execution["id"], "running")
+        repository.transition(execution["id"], "interrupted", "构造中断")
+        manager = client.app.state.home_migration
+        manager.start_execute = lambda *args: calls.append(("execute", args)) or response_task
+        manager.resume_execute = lambda *args: calls.append(("resume", args)) or response_task
+        manager.start_rollback = lambda *args: calls.append(("rollback", args)) or response_task
+        manager.start_cleanup = lambda *args: calls.append(("cleanup", args)) or response_task
+        client.app.state.privileged.execute = lambda action, payload: {
+            "migration_id": payload["migration_id"],
+            "phase": "copying",
+            "username": "alice",
+        }
+
+        rejected = client.post(
+            "/api/v1/home-migrations/execute",
+            headers=headers,
+            json={
+                "preflight_task_id": preflight["id"],
+                "confirmation": "错误",
+                "idempotency_key": "home-execute-key-123",
+            },
+        )
+        accepted = client.post(
+            "/api/v1/home-migrations/execute",
+            headers=headers,
+            json={
+                "preflight_task_id": preflight["id"],
+                "confirmation": "迁移home:alice",
+                "idempotency_key": "home-execute-key-123",
+            },
+        )
+        resumed = client.post(
+            f"/api/v1/tasks/{execution['id']}/home-migration-resume",
+            headers=headers,
+            json={"confirmation": f"继续home迁移:{preflight['id']}"},
+        )
+        status = client.get(f"/api/v1/home-migrations/{preflight['id']}", headers=headers)
+        rolled = client.post(
+            f"/api/v1/home-migrations/{preflight['id']}/rollback",
+            headers=headers,
+            json={
+                "confirmation": "回退home:alice",
+                "idempotency_key": "home-rollback-key-123",
+            },
+        )
+        cleaned = client.post(
+            f"/api/v1/home-migrations/{preflight['id']}/cleanup",
+            headers=headers,
+            json={
+                "confirmation": "清理原home备份:alice",
+                "idempotency_key": "home-cleanup-key-123",
+            },
+        )
+
+    assert rejected.status_code == 400
+    assert accepted.status_code == resumed.status_code == rolled.status_code == 202
+    assert cleaned.status_code == 202
+    assert status.status_code == 200 and status.json()["phase"] == "copying"
+    assert [name for name, _ in calls] == ["execute", "resume", "rollback", "cleanup"]

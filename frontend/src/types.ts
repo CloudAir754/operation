@@ -307,6 +307,20 @@ export interface PersistentTask {
   }>
 }
 
+export interface HomeMigrationStatus {
+  migration_id: string
+  phase: string
+  username: string
+  uid: number
+  source: string
+  backup: string
+  target_parent: string
+  destination: string
+  required_bytes?: number
+  safety_margin_bytes?: number
+  observation_started_at?: string
+}
+
 export interface PortUsageSnapshot {
   port: number
   protocol: 'tcp' | 'udp' | 'any'

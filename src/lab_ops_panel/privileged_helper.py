@@ -18,6 +18,13 @@ from lab_ops_panel.infrastructure.file_transfer import (
     execute_file_transfer,
     file_transfer_preflight,
 )
+from lab_ops_panel.infrastructure.home_migration import (
+    cleanup_home_migration_backup,
+    execute_home_migration,
+    home_migration_preflight,
+    home_migration_status,
+    rollback_home_migration,
+)
 from lab_ops_panel.infrastructure.pam_rules import apply_policy_changes, restore_policy_backup
 from lab_ops_panel.infrastructure.processes import (
     port_usage,
@@ -178,6 +185,52 @@ def _dispatch(action: str, payload: dict[str, Any]) -> dict[str, Any]:
         return cleanup_file_transfer_source(
             source, destination, operation_id, expected_device, expected_inode
         )
+    if action == "home-migration-preflight":
+        username = payload.get("username")
+        expected_uid = payload.get("expected_uid")
+        target_parent = payload.get("target_parent")
+        migration_id = payload.get("migration_id")
+        safety_margin_percent = payload.get("safety_margin_percent", 10)
+        verify_contents = payload.get("verify_contents", False)
+        if (
+            not isinstance(username, str)
+            or not isinstance(expected_uid, int)
+            or not isinstance(target_parent, str)
+            or not isinstance(migration_id, str)
+            or not isinstance(safety_margin_percent, int)
+            or not isinstance(verify_contents, bool)
+        ):
+            raise ValueError("home 迁移预检参数无效")
+        return home_migration_preflight(
+            username,
+            expected_uid,
+            target_parent,
+            migration_id,
+            safety_margin_percent,
+            verify_contents=verify_contents,
+        )
+    if action == "home-migration-status":
+        migration_id = payload.get("migration_id")
+        if not isinstance(migration_id, str):
+            raise ValueError("home 迁移状态参数无效")
+        return home_migration_status(migration_id)
+    if action == "home-migration-execute":
+        migration_id = payload.get("migration_id")
+        requester_pid = payload.get("requester_pid")
+        if not isinstance(migration_id, str) or not isinstance(requester_pid, int):
+            raise ValueError("home 迁移执行参数无效")
+        return execute_home_migration(migration_id, requester_pid)
+    if action == "home-migration-rollback":
+        migration_id = payload.get("migration_id")
+        requester_pid = payload.get("requester_pid")
+        if not isinstance(migration_id, str) or not isinstance(requester_pid, int):
+            raise ValueError("home 迁移回退参数无效")
+        return rollback_home_migration(migration_id, requester_pid)
+    if action == "home-migration-cleanup":
+        migration_id = payload.get("migration_id")
+        if not isinstance(migration_id, str):
+            raise ValueError("home 迁移备份清理参数无效")
+        return cleanup_home_migration_backup(migration_id)
     if action == "pam-update":
         changes = payload.get("changes")
         if not isinstance(changes, dict):

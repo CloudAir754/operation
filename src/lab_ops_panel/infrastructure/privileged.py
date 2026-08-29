@@ -27,6 +27,11 @@ ALLOWED_ACTIONS = frozenset(
         "file-transfer-preflight",
         "file-transfer-copy",
         "file-transfer-cleanup",
+        "home-migration-preflight",
+        "home-migration-execute",
+        "home-migration-status",
+        "home-migration-rollback",
+        "home-migration-cleanup",
     }
 )
 ACTION_TIMEOUTS = {
@@ -36,6 +41,11 @@ ACTION_TIMEOUTS = {
     "file-transfer-preflight": 3600,
     "file-transfer-copy": 7200,
     "file-transfer-cleanup": 3600,
+    "home-migration-preflight": 3600,
+    "home-migration-execute": 14_400,
+    "home-migration-status": 120,
+    "home-migration-rollback": 3600,
+    "home-migration-cleanup": 7200,
 }
 
 
@@ -85,6 +95,8 @@ class PrivilegedExecutor:
             "uid-processes-terminate",
             "user-delete-preflight",
             "user-delete",
+            "home-migration-execute",
+            "home-migration-rollback",
         }:
             request_payload["requester_pid"] = os.getpid()
         encoded = json.dumps(request_payload, ensure_ascii=False, separators=(",", ":"))

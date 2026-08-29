@@ -30,6 +30,11 @@ ACTIONS = (
     "file-transfer-preflight",
     "file-transfer-copy",
     "file-transfer-cleanup",
+    "home-migration-preflight",
+    "home-migration-execute",
+    "home-migration-status",
+    "home-migration-rollback",
+    "home-migration-cleanup",
 )
 HELPER = Path("/usr/local/libexec/labopspanel-privileged")
 TOOL_DIRECTORY = Path("/usr/local/lib/labopspanel-tools")

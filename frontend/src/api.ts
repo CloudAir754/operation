@@ -1,4 +1,4 @@
-import type { GpuSnapshot, HomeScanTask, Overview, PamPolicyChangePreview, PamPolicyChangeValues, PamPolicySnapshot, PasswordPolicySummary, PasswordPolicyValues, PersistentTask, PortUsageSnapshot, PrivilegedCapability, ResourceSnapshot, StorageSnapshot, UserAccount, UserImportPreview } from './types'
+import type { GpuSnapshot, HomeMigrationStatus, HomeScanTask, Overview, PamPolicyChangePreview, PamPolicyChangeValues, PamPolicySnapshot, PasswordPolicySummary, PasswordPolicyValues, PersistentTask, PortUsageSnapshot, PrivilegedCapability, ResourceSnapshot, StorageSnapshot, UserAccount, UserImportPreview } from './types'
 
 async function errorDetail(response: Response, fallback: string): Promise<string> {
   const body = await response.json().catch(() => null) as { detail?: string } | null
@@ -194,6 +194,14 @@ export async function loadTask(token: string, taskId: string): Promise<Persisten
   })
   if (!response.ok) throw new Error('读取任务状态失败。')
   return response.json() as Promise<PersistentTask>
+}
+
+export async function loadTasks(token: string): Promise<PersistentTask[]> {
+  const response = await fetch('/api/v1/tasks', {
+    headers: { 'X-LabOps-Token': token },
+  })
+  if (!response.ok) throw new Error('读取最近任务失败。')
+  return response.json() as Promise<PersistentTask[]>
 }
 
 export async function downloadCredentials(token: string, taskId: string): Promise<void> {
@@ -421,5 +429,97 @@ export async function cleanupFileTransfer(
     }),
   })
   if (!response.ok) throw new Error(await errorDetail(response, '源文件清理任务启动失败。'))
+  return response.json() as Promise<PersistentTask>
+}
+
+export async function startHomeMigrationPreflight(
+  token: string,
+  username: string,
+  targetParent: string,
+  safetyMarginPercent: number,
+  verifyContents: boolean,
+): Promise<PersistentTask> {
+  const response = await fetch(`/api/v1/users/${encodeURIComponent(username)}/home-migrations/preflight`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({
+      target_parent: targetParent,
+      safety_margin_percent: safetyMarginPercent,
+      verify_contents: verifyContents,
+      idempotency_key: crypto.randomUUID(),
+    }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, 'home 迁移预检启动失败。'))
+  return response.json() as Promise<PersistentTask>
+}
+
+export async function executeHomeMigration(
+  token: string,
+  preflightTaskId: string,
+  confirmation: string,
+): Promise<PersistentTask> {
+  const response = await fetch('/api/v1/home-migrations/execute', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({
+      preflight_task_id: preflightTaskId,
+      confirmation,
+      idempotency_key: crypto.randomUUID(),
+    }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, 'home 迁移执行任务启动失败。'))
+  return response.json() as Promise<PersistentTask>
+}
+
+export async function resumeHomeMigration(
+  token: string,
+  taskId: string,
+  confirmation: string,
+): Promise<PersistentTask> {
+  const response = await fetch(`/api/v1/tasks/${taskId}/home-migration-resume`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({ confirmation }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, 'home 迁移恢复失败。'))
+  return response.json() as Promise<PersistentTask>
+}
+
+export async function loadHomeMigrationStatus(
+  token: string,
+  migrationId: string,
+): Promise<HomeMigrationStatus> {
+  const response = await fetch(`/api/v1/home-migrations/${migrationId}`, {
+    headers: { 'X-LabOps-Token': token },
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '读取 home 迁移真实阶段失败。'))
+  return response.json() as Promise<HomeMigrationStatus>
+}
+
+export async function rollbackHomeMigration(
+  token: string,
+  migrationId: string,
+  confirmation: string,
+): Promise<PersistentTask> {
+  const response = await fetch(`/api/v1/home-migrations/${migrationId}/rollback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({ confirmation, idempotency_key: crypto.randomUUID() }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, 'home 迁移回退启动失败。'))
+  return response.json() as Promise<PersistentTask>
+}
+
+export async function cleanupHomeMigration(
+  token: string,
+  migrationId: string,
+  confirmation: string,
+): Promise<PersistentTask> {
+  const response = await fetch(`/api/v1/home-migrations/${migrationId}/cleanup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LabOps-Token': token },
+    body: JSON.stringify({ confirmation, idempotency_key: crypto.randomUUID() }),
+  })
+  if (!response.ok) throw new Error(await errorDetail(response, '原 home 备份清理启动失败。'))
   return response.json() as Promise<PersistentTask>
 }

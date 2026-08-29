@@ -40,6 +40,17 @@ sudo /usr/bin/python3 scripts/install_privileged_helper.py "$labops_user" --uv "
 - 受控部分文件迁移，先复制并校验元数据、原子发布目标，再由管理员独立确认清理源路径；
 - 可恢复的 ext4 home 跨盘迁移，按 UID 冻结进程、原地保留备份、复制校验、链接切换、用户身份试验，并支持中断恢复、回退和独立人工清理；
 - 空盘 GPT + ext4 初始化，纯预览命令计划、稳定设备身份和序列号确认、系统盘/挂载/签名/holder 拒绝、UUID `fstab` 原子更新、挂载验证及失败恢复；
+
+### NVIDIA 实机验收
+
+当前开发机没有 NVIDIA GPU。请在 RTX 3090 或更新的 amd64 Ubuntu 测试机安装项目依赖后，先空载执行，再启动一个可识别的 CUDA 工作负载执行进程级验收：
+
+```bash
+uv run python scripts/validate_nvidia_hardware.py
+uv run python scripts/validate_nvidia_hardware.py --require-process
+```
+
+脚本会核对多卡 index/UUID 关联、PCI Bus ID、显存和利用率范围、进程归属、采样字段以及“进程带宽必须为 `N/A`”规则；输出只包含设备/进程数量、可选能力计数和错误，不输出 GPU UUID、用户名或进程命令。两个命令均成功后，仍需人工确认页面与 `nvidia-smi` 的设备数量、型号和显存一致，再更新 `docs/实施状态.md`。
 - 回环监听限制和所有 API 的启动会话令牌校验。
 
 ## 一、项目边界

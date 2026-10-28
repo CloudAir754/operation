@@ -122,4 +122,3 @@ src/lab_ops_panel/
 - 后端 182 个用例覆盖解析、传输、DPAPI、探针、任务、迁移与 API；Windows 之外跳过 DPAPI 用例。
 - 传输层用 Windows 批处理模拟 ssh 客户端验证超时、取消、截断与 stdin；其余用例使用 `FakeTransport`。
 - 前端 20 个用例覆盖 API 错误映射、主机卡片、分区降级、确认对话框、任务取消与 SSE、密码设置/清除。
-

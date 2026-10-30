@@ -63,13 +63,28 @@
 证据：`docs/screenshots/03-tasks.png`；端到端演示中 `service_restart` 任务三步全部 `ok`、SSE 收到 `done`、
 重复幂等键返回 409、`ssh.service` stop 返回 409、审计出现 `service_restart/succeeded`。
 
-### 4.3 阶段三：趋势与扩展（未开始）
+### 4.3 阶段三：资源观测与磁盘空间管理（A–D 已完成）
 
-- [ ] 短周期资源趋势与 GPU 进程视图。
-- [ ] 受控命令之外的批量任务、账户同步、SSH 公钥管理（需先补需求与安全验收）。
+详细范围、sudo 矩阵、组件评估与测试场景见 [资源观测与磁盘空间管理规划](resource-observability-plan.md)，
+接口契约见 [api.md §8](api.md)。
 
-首版有意不实现以上内容；`run_command` 仅在 `LABOPS_ALLOW_ARBITRARY_COMMANDS=true` 时开放，
-仍受 Bash 语法检查、确认、超时与输出截断约束。
+- [x] A：CPU/内存/Swap、磁盘 I/O、网络 I/O 短周期趋势；返回采样间隔、远端/本机时间、累计计数与派生速率；
+  计数器回绕/间隔过短时返回 `reset` 与 `null` 速率，不编造 0。
+- [x] B：GPU 设备详情（PCI、驱动、显存、利用率、温度、功耗、时钟、MIG）与进程表（PID/USER/命令/程序位置/
+  启动时间），`processesStatus` 区分 `ok`/`partial`/`unavailable`；不向前端暴露 `nvidia-smi` 原始文本。
+- [x] C：挂载点 allowlist、后台扫描任务、SSE 进度与节点分块、取消、应用重启标记 `interrupted`；
+  one-file-system、符号链接策略、硬链接 inode 去重、稀疏文件 `allocatedBytes`/`apparentBytes`、
+  权限错误 `incomplete` 传播、deleted-open 文件、min size/uid/扩展名/时间过滤、treemap 与目录/最大文件/UID 汇总。
+- [x] D：可登录用户、主组/附加组、home 摘要、sudo 三态（`组成员`/`策略存在`/`有效权限`），
+  `unknown` 不折算为 `false`；按 UID 的空间扫描复用 C 的扫描管线。
+- [ ] 受控命令之外的批量任务、账户同步、SSH 公钥管理（需先补需求与安全验收，仍未开始）。
+- [ ] AMD/Intel GPU 适配器（规划中的后续项，首版仅 NVIDIA）。
+- [ ] 逐目录的实时进度（当前为阶段式进度：queued → scanning → aggregating → chunking → done）。
+
+证据：`uv run pytest`（275 passed，1 skipped）覆盖指标差分与回绕、GPU 缺失/多卡/MIG/不可见进程、
+存储树聚合与硬链接/稀疏/过滤、用户与 sudo 三态、扫描允许清单/取消/并发限制/重启恢复/SSE；
+前端 `npm test`（46 passed）覆盖五个页签、图表降级、GPU 进程过滤排序、扫描进度/取消/treemap、sudo 三态；
+界面截图见 `docs/screenshots/06-metrics.png`、`07-gpu.png`、`08-storage.png`、`09-users.png`。
 
 ### 4.4 复验命令
 

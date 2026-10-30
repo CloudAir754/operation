@@ -44,6 +44,7 @@ AMD/Intel GPU 适配器与远端常驻指标采集。后续功能必须先补充
 
 ## 5. 相关文档
 
+- [资源观测与磁盘空间管理规划](resource-observability-plan.md)
 - [架构与实现要求](architecture.md)
 - [API 契约](api.md)
 - [安全设计与残余风险](security.md)

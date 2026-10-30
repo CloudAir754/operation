@@ -94,6 +94,10 @@ class Server(Base):
     last_connect_error: Mapped[str | None] = mapped_column(Text)
     last_connect_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
+    # 账户生命周期使用的主机级默认路径；为空时由请求或内置默认值决定。
+    data_root: Mapped[str | None] = mapped_column(String(1024))
+    migration_root: Mapped[str | None] = mapped_column(String(1024))
+
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime, default=utcnow, onupdate=utcnow, nullable=False
@@ -229,4 +233,118 @@ class AuditLog(Base):
     operator: Mapped[str] = mapped_column(String(32), default="local-admin", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime, default=utcnow, index=True, nullable=False
+    )
+
+
+class AppSetting(Base):
+    """应用级键值设置（例如密码生成规则）；不保存任何凭据。"""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class PasswordPolicyChange(Base):
+    """一次密码策略修改的原文、备份与验证结果，用于“恢复本次修改前配置”。"""
+
+    __tablename__ = "password_policy_changes"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    server_id: Mapped[int] = mapped_column(
+        ForeignKey("servers.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(16), default="applied", nullable=False)
+    targets: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    diff: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    backup_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    conf_before: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    conf_after: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    password_before: Mapped[str | None] = mapped_column(Text)
+    password_after: Mapped[str | None] = mapped_column(Text)
+    auth_before: Mapped[str | None] = mapped_column(Text)
+    auth_after: Mapped[str | None] = mapped_column(Text)
+    validation: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
+    restored_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
+class AccountBatch(Base):
+    """批量新建用户；生成的目标账户密码只存在内存，不写这里。"""
+
+    __tablename__ = "account_batches"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    server_id: Mapped[int] = mapped_column(
+        ForeignKey("servers.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
+    stage: Mapped[str] = mapped_column(String(32), default="queued", nullable=False)
+    progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    request: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    results: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
+    error: Mapped[str | None] = mapped_column(Text)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
+class HomeMigration(Base):
+    """用户目录迁移作业；``stage`` 记录可恢复的阶段，备份保留到人工清理。"""
+
+    __tablename__ = "home_migrations"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    server_id: Mapped[int] = mapped_column(
+        ForeignKey("servers.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    login: Mapped[str] = mapped_column(String(64), nullable=False)
+    uid: Mapped[int] = mapped_column(Integer, nullable=False)
+    gid: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_home: Mapped[str] = mapped_column(String(1024), nullable=False)
+    target_root: Mapped[str] = mapped_column(String(1024), nullable=False)
+    target_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    staging_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    backup_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
+    stage: Mapped[str] = mapped_column(String(32), default="preflight", nullable=False)
+    progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    request: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    preflight: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    error: Mapped[str | None] = mapped_column(Text)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    account_status_before: Mapped[str | None] = mapped_column(String(16))
+    backup_retention_days: Mapped[int] = mapped_column(Integer, default=7, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    cleaned_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
+class DatasetAllocation(Base):
+    """给某个用户在数据盘上分配的空间，以及 home 下的符号链接。"""
+
+    __tablename__ = "dataset_allocations"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    server_id: Mapped[int] = mapped_column(
+        ForeignKey("servers.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    login: Mapped[str] = mapped_column(String(64), nullable=False)
+    uid: Mapped[int] = mapped_column(Integer, nullable=False)
+    gid: Mapped[int] = mapped_column(Integer, nullable=False)
+    data_root: Mapped[str] = mapped_column(String(1024), nullable=False)
+    data_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    link_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="succeeded", nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, default=utcnow, onupdate=utcnow, nullable=False
     )

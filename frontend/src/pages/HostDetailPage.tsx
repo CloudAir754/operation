@@ -16,6 +16,7 @@ import type {
 } from "../api/types";
 import { HostTabList, isHostTabId } from "../components/host/HostTabs";
 import type { HostTabId } from "../components/host/HostTabs";
+import { AccountsTab } from "../components/host/accounts/AccountsTab";
 import { GpuTab } from "../components/host/GpuTab";
 import { MetricsTab } from "../components/host/MetricsTab";
 import { SECTION_STATUS_DESCRIPTIONS, SectionNotice } from "../components/host/SectionNotice";
@@ -661,6 +662,13 @@ export function HostDetailPage() {
         ) : null}
         {activeTab === "users" ? (
           <UsersTab serverId={serverId} onScanStarted={handleUserScanStarted} />
+        ) : null}
+        {activeTab === "accounts" ? (
+          <AccountsTab
+            serverId={serverId}
+            hasSudoPassword={host?.hasSudoPassword ?? false}
+            onSudoChanged={refreshHost}
+          />
         ) : null}
       </div>
 

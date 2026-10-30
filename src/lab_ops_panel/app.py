@@ -21,6 +21,7 @@ from lab_ops_panel.db import create_db_engine, create_session_factory
 from lab_ops_panel.errors import ApiError, api_error_handler
 from lab_ops_panel.migrations_runner import upgrade_database
 from lab_ops_panel.observability import ObservabilityService
+from lab_ops_panel.provisioning import ProvisioningService
 from lab_ops_panel.remote.actions import build_registry
 from lab_ops_panel.secrets_store import CredentialStore, SecretProtector
 from lab_ops_panel.snapshots import SnapshotService
@@ -69,6 +70,13 @@ def create_app(
         bus=event_bus,
         snapshots=snapshots,
     )
+    provisioning = ProvisioningService(
+        session_factory=session_factory,
+        transport=ssh_transport,
+        settings=resolved,
+        credentials=credentials,
+        bus=event_bus,
+    )
     container = AppContainer(
         settings=resolved,
         engine=engine,
@@ -80,6 +88,7 @@ def create_app(
         tasks=tasks,
         snapshots=snapshots,
         observability=observability,
+        provisioning=provisioning,
         version=__version__,
     )
 
@@ -92,6 +101,9 @@ def create_app(
         interrupted_scans = container.observability.recover_scans()
         if interrupted_scans:
             logger.warning("启动时将 %d 个未完成空间扫描标记为 interrupted", interrupted_scans)
+        recovered = container.provisioning.recover_on_startup()
+        if recovered["batches"] or recovered["migrations"]:
+            logger.warning("启动时中断账户生命周期作业：%s", recovered)
         logger.info(
             "LabOpsPanel %s 已启动，监听 %s:%s，SSH 配置：%s",
             __version__,
@@ -104,6 +116,7 @@ def create_app(
         finally:
             container.tasks.shutdown()
             container.observability.shutdown()
+            container.provisioning.shutdown()
             engine.dispose()
 
     app = FastAPI(

@@ -408,7 +408,7 @@ data: {"type":"done","taskId":"...","status":"succeeded","progress":100,"exitCod
 | 路径 | 页面 | 数据来源 |
 | --- | --- | --- |
 | `/` | 主机总览 | `GET /api/servers`、`GET /api/ssh-config`、`POST /api/servers/import` |
-| `/hosts/:id` | 主机详情 | snapshot、services、logs、`POST /api/tasks` |
+| `/hosts/:id` | 主机详情 | snapshot、services、logs、`POST /api/tasks`；`?tab=accounts` 打开账户生命周期 |
 | `/tasks` | 维护任务 | `GET /api/tasks`、SSE、取消 |
 | `/hosts/:id/settings` | 主机设置 | `PATCH /api/servers/{id}`、secret、connection-test |
 
@@ -717,3 +717,194 @@ data: {"type":"done","scanId":"…","status":"succeeded","progress":100,"error":
 | 502 | `mounts_unavailable` | 无法读取挂载点清单（fail closed） |
 | 502 | `users_unavailable` | 无法读取用户清单 |
 | 503 | `observability_unavailable` | 服务关闭中 |
+
+## 9. 阶段四接口（账户生命周期）
+
+统一约定：
+
+- 所有写操作需要远端 sudo；未保存运维 sudo 密码时返回 `409 sudo_password_missing`，
+  前端据此提示前往「运维 sudo 密码」卡片填写。
+- 请求模型拒绝未知字段；生成的**目标账户密码永不落库**，只能通过一次性 `reveal` 接口取回。
+- 迁移、批次与空间分配都写入审计，审计只记录动作、目标、结果与错误摘要。
+
+### 9.1 密码生成规则
+
+`GET /api/accounts/generator` 返回当前规则、是否已配置、脱敏示例、一致性检查与系统下限：
+
+```json
+{
+  "configured": true,
+  "rules": {
+    "length": 20, "minUpper": 1, "minLower": 1, "minDigits": 1, "minSymbols": 1,
+    "symbols": "!#%+-_=.:?@^~*", "excludeAmbiguous": true, "excludeChars": ""
+  },
+  "effectiveLength": 20,
+  "adjustments": [
+    {"field": "length", "label": "长度", "requested": 10, "applied": 14, "reason": "系统 PAM 策略更严格"}
+  ],
+  "example": "Xy••••••••••••••••••",
+  "checks": [
+    {"code": "length_sum", "label": "各类最少字符数之和不超过总长度", "ok": true, "message": "4 / 20", "blocking": true}
+  ],
+  "floor": {"minLength": 14, "minUpper": 1, "minDigits": 1, "minClasses": 0,
+            "maxRepeat": 0, "maxSequence": 0, "maxClassRepeat": 0,
+            "rejectUsername": false, "source": "conf", "notes": []},
+  "serverId": 1,
+  "updatedAt": "2026-10-30T12:00:00Z"
+}
+```
+
+- `PUT /api/accounts/generator`：保存全局默认规则（不影响已创建账户）。
+- `POST /api/accounts/generator/preview`：`{"rules": {...}, "serverId": 1}`，
+  用未保存规则生成脱敏示例与检查结果；规则冲突返回 `422 validation_failed`。
+
+### 9.2 系统密码策略
+
+`GET /api/servers/{serverId}/accounts/policy?refresh=false`
+
+```json
+{
+  "serverId": 1,
+  "collectedAt": "2026-10-30T12:00:00Z",
+  "status": "ok",
+  "error": null,
+  "os": {"id": "ubuntu", "versionId": "24.04", "prettyName": "Ubuntu 24.04 LTS"},
+  "fields": [
+    {"key": "minlen", "label": "最小长度", "value": 12, "origin": "conf",
+     "writable": true, "min": 8, "max": 128, "reason": null},
+    {"key": "retry", "label": "认证重试次数", "value": 3, "origin": "pam",
+     "writable": true, "min": 1, "max": 10, "reason": null}
+  ],
+  "capabilities": {
+    "pwqualityConf": true, "pwqualityModule": true, "pwqualityModuleEditable": true,
+    "pamRetryEditable": true, "pwscore": true, "chage": true, "useradd": true,
+    "rsync": true, "dropInDir": false,
+    "writableFields": ["minlen", "retry"], "readOnly": false, "reasons": []
+  },
+  "managedLines": ["password requisite pam_pwquality.so retry=3"],
+  "unknownKeys": ["enforcing = 1"],
+  "loginDefs": {"PASS_MIN_LEN": "8", "ENCRYPT_METHOD": "yescrypt"},
+  "notes": ["minlen 由 PAM 行内参数决定，修改会改 common-password"],
+  "floor": {"...": "同 9.1"},
+  "generator": {"...": "同 9.1"}
+}
+```
+
+- `origin` 取值 `pam`/`conf`/`default`：PAM 行内参数优先级高于 `pwquality.conf`。
+- `POST /api/servers/{serverId}/accounts/policy/preview`：`{"targets": {"minlen": 14}}`
+  返回 `fields`（差异）、`diff`（unified diff）、`blockers`、`warnings`、`applicable`；
+  只读字段进入 `blockers`，越界值返回 `422 validation_failed`。
+- `PUT /api/servers/{serverId}/accounts/policy`：`{"targets": {...}, "confirm": true}`；
+  备份 → 写入 → 重新读取比对 → 行为验证（`pwscore`），失败自动恢复并返回
+  `500 policy_validation_failed`。未确认返回 `422 confirmation_required`。
+- `GET /api/servers/{serverId}/accounts/policy/changes`：最近的修改记录。
+- `POST /api/servers/{serverId}/accounts/policy/changes/{changeId}/restore`：恢复该次修改前的文件。
+
+### 9.3 批量新建用户
+
+`POST /api/servers/{serverId}/account-batches`
+
+```json
+{
+  "users": [
+    {"login": "alice", "comment": "Alice", "shell": "/bin/bash", "groups": [], "uid": null, "password": null},
+    {"login": "bob", "password": "Str0ng!Password#2026"}
+  ],
+  "rules": null,
+  "confirm": true
+}
+```
+
+响应 `201` 为批次对象：
+
+```json
+{
+  "id": "3f2c…", "serverId": 1, "serverAlias": "lab-01",
+  "status": "queued", "stage": "queued", "progress": 0,
+  "results": [], "error": null, "hasGeneratedPasswords": true,
+  "createdAt": "…", "startedAt": null, "finishedAt": null
+}
+```
+
+- `results[]` 逐账户给出 `{login, status, error, uid, home, passwordGenerated}`。
+- `POST /api/account-batches/{batchId}/reveal`：一次性返回 `passwords`（登录名 → 明文），
+  读取后置空；再次调用返回 `409 passwords_unavailable`。
+- `GET /api/account-batches/{batchId}`、`GET /api/servers/{id}/account-batches`（列表）、
+  `POST /api/account-batches/{batchId}/cancel`（取消未执行账户）、
+  `GET /api/account-batches/{batchId}/events`（SSE）。
+- 手工密码不满足合并后的规则返回 `422 password_policy_violation`。
+
+### 9.4 用户目录迁移
+
+`POST /api/servers/{serverId}/home-migrations/preflight`
+
+```json
+{"login": "zhangsan", "targetRoot": "/data2/users"}
+```
+
+返回 `paths`（`source`/`targetRoot`/`target`/`staging`/`backup`）、`counts`、`space`、
+`checks[]`（`code`/`label`/`ok`/`message`/`blocking`）与 `allowed`。只读，不需要 sudo。
+
+`POST /api/servers/{serverId}/home-migrations`：`{login, targetRoot, safetyMarginPercent,
+fullChecksum, retentionDays, confirm}`，预检未通过返回 `422 preflight_blocked`。
+
+迁移对象：
+
+```json
+{
+  "id": "ab12…", "serverId": 1, "login": "zhangsan", "uid": 1001, "gid": 1001,
+  "status": "running", "stage": "copy", "stageIndex": 4,
+  "stages": ["preflight","space_check","freeze","rename","copy","verify","switch","restore","observe"],
+  "progress": 47,
+  "paths": {"source": "/home/zhangsan", "targetRoot": "/data2/users",
+            "target": "/data2/users/zhangsan",
+            "staging": "/data2/users/zhangsan.labops-staging-abcd1234",
+            "backup": "/home/zhangsan.labops-backup-20261030-120000-abcd1234"},
+  "counts": {"files": 1200, "dirs": 80, "apparentBytes": 0, "allocatedBytes": 0, "inodes": 0},
+  "space": {"requiredBytes": 0, "freeBytes": 0, "ok": true},
+  "checks": [], "result": {}, "error": null,
+  "accountStatusBefore": "P", "backupRetentionDays": 7,
+  "rollbackAvailable": true, "cleanupAvailable": false, "cancelRequested": false,
+  "createdAt": "…", "startedAt": "…", "finishedAt": null, "cleanedAt": null
+}
+```
+
+- `GET /api/home-migrations/{id}`、`GET /api/servers/{id}/home-migrations`（列表）。
+- `POST /api/home-migrations/{id}/cancel`：在当前阶段结束后停止；已结束返回 `409 migration_finished`。
+- `POST /api/home-migrations/{id}/resume`：先核对远端状态再决定继续阶段；
+  状态无法安全判定时返回 `409 migration_state_ambiguous`。
+- `POST /api/home-migrations/{id}/rollback`：`{"discardNewData": false}`；
+  已建立链接且新位置有数据时必须显式传 `true`。
+- `POST /api/home-migrations/{id}/cleanup`：`{"confirmPath": "<备份路径>"}`；
+  路径不一致返回 `422 cleanup_confirmation_mismatch`；只在 `succeeded` + `observe` 阶段可用。
+- `GET /api/home-migrations/{id}/events`：SSE（`progress` / `done`）。
+
+### 9.5 新空间分配
+
+- `GET|PUT /api/servers/{serverId}/storage-settings`：
+  `{serverId, dataRoot, migrationRoot, defaultDataRoot: "/data2", defaultMigrationRoot: "/data2/users"}`。
+- `POST /api/servers/{serverId}/datasets`：
+  `{"login": "zhangsan", "linkName": "data2_disk", "dataRoot": "/data2", "reuseExisting": false, "confirm": true}`
+  → `{id, serverId, login, uid, gid, dataRoot, dataPath, linkPath, status, writable, error, createdAt}`。
+  数据盘不是本地 ext4 返回 `422 filesystem_not_supported`；系统账户返回 `422 system_account`。
+- `GET /api/servers/{serverId}/datasets`：已分配清单。
+- `POST /api/datasets/{datasetId}/unlink`：只删除符号链接，数据目录保留。
+
+### 9.6 阶段四错误码
+
+| HTTP | code | 说明 |
+| --- | --- | --- |
+| 409 | `sudo_password_missing` | 未保存运维 sudo 密码 |
+| 422 | `confirmation_required` | 写操作缺少确认 |
+| 422 | `validation_failed` | 规则或策略字段不合法 |
+| 422 | `password_policy_violation` | 手工密码低于规则下限 |
+| 422 | `preflight_blocked` | 迁移预检未通过 |
+| 422 | `filesystem_not_supported` | 非本地 ext4 |
+| 422 | `cleanup_confirmation_mismatch` | 清理确认路径与备份路径不一致 |
+| 409 | `passwords_unavailable` | 生成的密码已读取或已过期 |
+| 409 | `processes_remaining` | 冻结后仍有该 UID 的进程 |
+| 409 | `verify_failed` / `checksum_failed` / `space_delta_anomaly` | 迁移校验失败 |
+| 409 | `functional_test_failed` | 迁移后功能验证失败（已自动回退） |
+| 409 | `migration_state_ambiguous` | 远端状态无法安全判定 |
+| 409 | `migration_finished` / `batch_finished` | 作业已结束 |
+| 500 | `policy_validation_failed` | 策略写入后验证失败（已恢复备份） |

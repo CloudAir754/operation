@@ -200,7 +200,59 @@ POST /storage/scans
 
 ### 7.6 前端结构
 
-- 主机详情页拆分为「概览 / 资源 / GPU / 磁盘空间 / 用户」五个页签，`?tab=` 深链接，仅激活页签拉取数据。
+- 主机详情页拆分为「概览 / 资源 / GPU / 磁盘空间 / 用户 / 账户」六个页签，`?tab=` 深链接，
+  仅激活页签拉取数据。
 - 资源/GPU 趋势每 2 秒轮询，页面隐藏或切走页签时停止；图表为纯 SVG（无第三方图表依赖）。
 - 空间扫描通过 SSE 接收进度与节点分块，完成后以 `GET /storage/scans/{id}` 的结果为准；
   取消、失败、`interrupted` 均有明确状态。
+
+## 8. 阶段四：账户生命周期实现
+
+### 8.1 模块
+
+```text
+src/lab_ops_panel/
+  passwords.py                规则模型、PAM 下限合并、secrets 生成与自检、脱敏示例
+  remote/password_policy.py   pwquality.conf/PAM 解析、实际生效值、最小化改写、unified diff
+  remote/accounts.py          登录名/路径/UID 校验与固定命令模板（useradd、rsync、mv、ln…）
+  provisioning.py             ProvisioningService：策略、批次、迁移状态机、空间分配
+  schemas_accounts.py         阶段四 API 模型（请求拒绝未知字段，响应不含明文密码）
+  api/accounts.py             22 个路由（含两个 SSE 端点）
+  migrations/versions/0003_account_lifecycle.py
+```
+
+新增表：`app_settings`（密码生成规则）、`password_policy_changes`、`account_batches`、
+`home_migrations`、`dataset_allocations`；`servers` 增加 `data_root` 与 `migration_root`。
+
+### 8.2 探针扩展（`PROBE_VERSION = 3`）
+
+| 模式 | 用途 | 数据来源 |
+| --- | --- | --- |
+| `password_policy` | 读取实际生效的密码策略与能力 | `pwquality.conf`、`pwquality.conf.d/*`、`/etc/pam.d/common-{password,auth}`、`login.defs`、`which` |
+| `account_info` | 单个账户的 UID/GID/home/shell/密码状态 | `pwd`、`passwd -S` |
+| `home_inspect` | 迁移预检（源、目标、子挂载、统计、冲突） | `lstat`/`statvfs`/`/proc/self/mounts`/有界遍历 |
+| `tree_stats` | 单路径文件数/目录数/逻辑大小/实际占用/inode | 有界遍历（默认 120 秒、200 万条目） |
+| `dataset_inspect` | 空间分配预检（账户、数据根、目标目录、链接状态） | 同上 |
+
+所有探针都是只读的；写操作由固定命令模板在 `ProvisioningService` 中执行。
+
+### 8.3 迁移状态机
+
+`preflight → space_check → freeze → rename → copy → verify → switch → restore → observe`。
+
+- 阶段写库后执行，异常统一落为 `failed` + 当前 `stage`；应用重启把 `queued/running` 标为
+  `interrupted` 并保留阶段与备份信息。
+- `resume` 先用 `home_inspect` 核对远端状态（源是否已是链接、备份/目标是否存在），
+  再选择 `preflight`/`copy`/`verify`/`restore` 之一继续；无法判定时拒绝而不是猜测。
+- `rollback` 与 `cleanup` 都是显式入口，带二次确认与路径复核；清理只在
+  `status=succeeded` 且 `stage=observe` 时开放。
+- `restore` 阶段的功能验证失败会触发自动回退，并把结果写入 `result.autoRollback`。
+
+### 8.4 前端
+
+- 新增 `frontend/src/components/host/accounts/`：`AccountsTab`（两层密码说明 + sudo 卡片）、
+  `GeneratorCard`（规则编辑、脱敏示例、一致性检查）、`PolicyCard`（实际生效值、diff 确认、
+  修改历史与恢复）、`UsersCard`（批量表单、结果、一次性密码弹窗）、`MigrationCard`
+  （预检、阶段时间线、继续/回退/清理）、`DatasetCard`（默认路径、分配、解除链接）。
+- 所有提权按钮统一使用 `SudoBadge`（「需要 sudo」），未保存 sudo 密码时给出明确提示。
+- 账户页签只在激活时拉取数据，符合“仅激活页签发请求”的既有约束。

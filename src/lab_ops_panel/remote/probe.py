@@ -12,6 +12,10 @@
 - ``users`` 可登录用户、sudo 三态与 home 摘要
 - ``mounts`` 挂载点清单（扫描 allowlist 来源）
 - ``storage`` 有界目录树扫描
+- ``password_policy`` 实际生效的 PAM/pwquality 密码策略与能力
+- ``home_inspect`` 用户目录迁移预检（源、目标、子挂载、空间与冲突）
+- ``tree_stats`` 单路径的文件数/目录数/逻辑大小/实际占用/inode 统计
+- ``dataset_inspect`` 新空间分配预检（账户、数据根、目标目录与链接状态）
 """
 
 from __future__ import annotations
@@ -25,8 +29,21 @@ from typing import Any
 from lab_ops_panel.remote.diagnosis import diagnose_result
 from lab_ops_panel.ssh.transport import CommandResult, SshTarget, SshTransport
 
-PROBE_VERSION = 2
-PROBE_MODES = ("snapshot", "services", "metrics", "gpu", "users", "mounts", "storage")
+PROBE_VERSION = 3
+PROBE_MODES = (
+    "snapshot",
+    "services",
+    "metrics",
+    "gpu",
+    "users",
+    "mounts",
+    "storage",
+    "password_policy",
+    "home_inspect",
+    "tree_stats",
+    "dataset_inspect",
+    "account_info",
+)
 
 PROBE_SOURCE = r"""
 import csv
@@ -42,7 +59,7 @@ import sys
 import time
 from datetime import datetime, timezone
 
-VERSION = 2
+VERSION = 3
 MAX_UNITS = 200
 MAX_MOUNTS = 40
 MAX_DEVICES = 200
@@ -54,6 +71,9 @@ HOME_BUDGET_SECONDS = 8.0
 MAX_SCAN_NODES = 1200
 MAX_DELETED_OPEN = 100
 MAX_TEXT = 300
+TREE_MAX_ENTRIES = 2000000
+TREE_BUDGET_SECONDS = 120.0
+MAX_DROPIN_FILES = 50
 SKIP_FILESYSTEMS = set([
     "proc", "sysfs", "devtmpfs", "tmpfs", "devpts", "cgroup", "cgroup2",
     "securityfs", "pstore", "autofs", "debugfs", "tracefs", "hugetlbfs",
@@ -1455,6 +1475,334 @@ def collect_storage(mount, max_depth=3, follow_symlinks=False, one_file_system=T
         return failed("error", exc)
 
 
+def mount_for(path):
+    target = os.path.abspath(path)
+    best = None
+    for entry in mount_table():
+        mount = entry["mount"]
+        if target == mount or target.startswith(mount.rstrip("/") + "/"):
+            if best is None or len(mount) > len(best["mount"]):
+                best = entry
+    return best
+
+
+def child_mounts(path):
+    target = os.path.abspath(path)
+    prefix = target.rstrip("/") + "/"
+    return [entry["mount"] for entry in mount_table() if entry["mount"].startswith(prefix)]
+
+
+def dir_entry_count(path, cap=100):
+    try:
+        with os.scandir(path) as handle:
+            count = 0
+            for _ in handle:
+                count += 1
+                if count >= cap:
+                    return cap
+            return count
+    except OSError:
+        return None
+
+
+def path_info(path):
+    result = {
+        "path": path,
+        "exists": False,
+        "isDir": False,
+        "isSymlink": False,
+        "isMountPoint": False,
+        "device": None,
+        "inode": None,
+        "uid": None,
+        "gid": None,
+        "mode": None,
+        "readOnly": False,
+        "filesystem": None,
+        "mountPoint": None,
+        "local": None,
+        "entryCount": None,
+        "freeBytes": None,
+        "totalBytes": None,
+        "freeInodes": None,
+    }
+    try:
+        link_info = os.lstat(path)
+    except OSError:
+        return result
+    result["exists"] = True
+    result["isSymlink"] = os.path.islink(path)
+    try:
+        info = os.stat(path) if result["isSymlink"] else link_info
+    except OSError:
+        info = link_info
+    result["isDir"] = os.path.isdir(path)
+    result["device"] = getattr(info, "st_dev", None)
+    result["inode"] = int(getattr(info, "st_ino", 0) or 0)
+    result["uid"] = getattr(info, "st_uid", None)
+    result["gid"] = getattr(info, "st_gid", None)
+    result["mode"] = "%o" % (getattr(info, "st_mode", 0) & 0o7777)
+    mount = mount_for(path)
+    if mount is not None:
+        result["mountPoint"] = mount["mount"]
+        result["filesystem"] = mount["filesystem"]
+        result["readOnly"] = "ro" in mount["options"].split(",")
+        result["isMountPoint"] = os.path.abspath(path) == mount["mount"]
+        result["local"] = mount["device"].startswith("/dev/")
+    if result["isDir"]:
+        result["entryCount"] = dir_entry_count(path)
+    try:
+        stats = os.statvfs(path)
+        result["freeBytes"] = stats.f_bavail * stats.f_frsize
+        result["totalBytes"] = stats.f_blocks * stats.f_frsize
+        result["freeInodes"] = stats.f_favail
+    except OSError:
+        pass
+    return result
+
+
+def tree_stats(path, deadline=TREE_BUDGET_SECONDS, cap=TREE_MAX_ENTRIES):
+    stats = {
+        "path": path,
+        "files": 0,
+        "dirs": 0,
+        "apparentBytes": 0,
+        "allocatedBytes": 0,
+        "inodes": 0,
+        "truncated": False,
+        "incomplete": False,
+        "error": None,
+        "elapsedMs": 0,
+    }
+    started = time.time()
+    try:
+        root_info = os.lstat(path)
+    except OSError as exc:
+        stats["incomplete"] = True
+        stats["error"] = str(exc)[:200]
+        return stats
+    seen = set()
+    stats["allocatedBytes"] += int(getattr(root_info, "st_blocks", 0) * 512)
+    stats["apparentBytes"] += int(root_info.st_size)
+    stats["inodes"] = 1
+    stack = [path]
+    try:
+        while stack:
+            current = stack.pop()
+            try:
+                with os.scandir(current) as handle:
+                    entries = list(handle)
+            except OSError as exc:
+                stats["incomplete"] = True
+                stats["error"] = str(exc)[:200]
+                continue
+            for entry in entries:
+                if stats["files"] + stats["dirs"] >= cap:
+                    stats["truncated"] = True
+                    return stats
+                if time.time() - started > deadline:
+                    stats["truncated"] = True
+                    return stats
+                try:
+                    info = entry.stat(follow_symlinks=False)
+                except OSError:
+                    stats["incomplete"] = True
+                    continue
+                is_dir = entry.is_dir(follow_symlinks=False)
+                duplicate = False
+                nlink = int(getattr(info, "st_nlink", 1) or 1)
+                if nlink > 1 and not is_dir:
+                    key = (getattr(info, "st_dev", 0), int(getattr(info, "st_ino", 0) or 0))
+                    if key in seen:
+                        duplicate = True
+                    else:
+                        seen.add(key)
+                if not duplicate:
+                    stats["inodes"] += 1
+                    stats["allocatedBytes"] += int(getattr(info, "st_blocks", 0) * 512)
+                    stats["apparentBytes"] += int(info.st_size)
+                if is_dir:
+                    stats["dirs"] += 1
+                    stack.append(entry.path)
+                else:
+                    stats["files"] += 1
+    except Exception as exc:
+        stats["incomplete"] = True
+        stats["error"] = str(exc)[:200]
+    stats["elapsedMs"] = int((time.time() - started) * 1000)
+    return stats
+
+
+def account_state(login):
+    try:
+        import pwd
+        entry = pwd.getpwnam(login)
+    except Exception:
+        return None
+    state = {
+        "login": login,
+        "uid": entry.pw_uid,
+        "gid": entry.pw_gid,
+        "home": entry.pw_dir,
+        "shell": entry.pw_shell,
+        "passwordStatus": None,
+    }
+    try:
+        binary = shutil.which("passwd")
+        if binary:
+            result = subprocess.run([binary, "-S", login], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                parts = result.stdout.split()
+                if len(parts) >= 2:
+                    state["passwordStatus"] = parts[1]
+    except Exception:
+        pass
+    return state
+
+
+def collect_password_policy():
+    try:
+        drop_dir = "/etc/security/pwquality.conf.d"
+        drop_ins = []
+        drop_in = False
+        if os.path.isdir(drop_dir):
+            drop_in = True
+            try:
+                names = sorted(os.listdir(drop_dir))
+            except OSError:
+                names = []
+            for name in names[:MAX_DROPIN_FILES]:
+                if not name.endswith(".conf"):
+                    continue
+                full = os.path.join(drop_dir, name)
+                drop_ins.append({"path": full, "content": read_text(full)})
+        release = {}
+        for line in read_text("/etc/os-release").splitlines():
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            release[key.strip()] = value.strip().strip('"').strip("'")
+        return section(data={
+            "os": {
+                "id": release.get("ID"),
+                "versionId": release.get("VERSION_ID"),
+                "prettyName": release.get("PRETTY_NAME"),
+            },
+            "pwquality": {
+                "path": "/etc/security/pwquality.conf",
+                "exists": os.path.exists("/etc/security/pwquality.conf"),
+                "readable": os.access("/etc/security/pwquality.conf", os.R_OK),
+                "content": read_text("/etc/security/pwquality.conf"),
+                "dropInDir": drop_in,
+                "dropIns": drop_ins,
+            },
+            "pam": {
+                "commonPassword": {
+                    "path": "/etc/pam.d/common-password",
+                    "content": read_text("/etc/pam.d/common-password"),
+                },
+                "commonAuth": {
+                    "path": "/etc/pam.d/common-auth",
+                    "content": read_text("/etc/pam.d/common-auth"),
+                },
+            },
+            "loginDefs": {
+                "path": "/etc/login.defs",
+                "content": read_text("/etc/login.defs"),
+            },
+            "capabilities": {
+                "pwscore": bool(shutil.which("pwscore")),
+                "chage": bool(shutil.which("chage")),
+                "useradd": bool(shutil.which("useradd")),
+                "rsync": bool(shutil.which("rsync")),
+                "pamAuthUpdate": bool(shutil.which("pam-auth-update")),
+            },
+        })
+    except Exception as exc:
+        return failed("error", exc)
+
+
+def collect_home_inspect(source, target_root, target_path, staging_path, backup_path):
+    try:
+        source_info = path_info(source)
+        parent_info = path_info(os.path.dirname(source.rstrip("/")) or "/")
+        target_root_info = path_info(target_root)
+        target_path_info = path_info(target_path)
+        staging_info = path_info(staging_path)
+        backup_info = path_info(backup_path)
+        account = None
+        if source_info["exists"] and source_info["uid"] is not None:
+            try:
+                import pwd
+                account = account_state(pwd.getpwuid(source_info["uid"]).pw_name)
+            except Exception:
+                account = None
+        counts = tree_stats(source) if source_info["isDir"] else None
+        return section(data={
+            "source": source_info,
+            "sourceParent": parent_info,
+            "targetRoot": target_root_info,
+            "targetPath": target_path_info,
+            "stagingPath": staging_info,
+            "backupPath": backup_info,
+            "subMounts": child_mounts(source) if source_info["isDir"] else [],
+            "counts": counts,
+            "account": account,
+            "capabilities": {
+                "rsync": bool(shutil.which("rsync")),
+                "getfacl": bool(shutil.which("getfacl")),
+                "setfacl": bool(shutil.which("setfacl")),
+                "loginctl": bool(shutil.which("loginctl")),
+                "systemctl": bool(shutil.which("systemctl")),
+                "pkill": bool(shutil.which("pkill")),
+            },
+        })
+    except Exception as exc:
+        return failed("error", exc)
+
+
+def collect_tree_stats(path):
+    try:
+        return section(data=tree_stats(path))
+    except Exception as exc:
+        return failed("error", exc)
+
+
+def collect_account_info(login):
+    try:
+        account = account_state(login)
+        return section(data={"account": account, "exists": account is not None})
+    except Exception as exc:
+        return failed("error", exc)
+
+
+def collect_dataset_inspect(login, data_root, data_path, link_path):
+    try:
+        root_info = path_info(data_root)
+        dataset_info = path_info(data_path)
+        link_info = path_info(link_path)
+        link_target = None
+        if link_info["isSymlink"]:
+            try:
+                link_target = os.path.realpath(link_path)
+            except OSError:
+                link_target = None
+        return section(data={
+            "account": account_state(login),
+            "dataRoot": root_info,
+            "dataPath": dataset_info,
+            "linkPath": link_info,
+            "linkTarget": link_target,
+            "capabilities": {
+                "install": bool(shutil.which("install")),
+                "mkdir": True,
+                "ln": bool(shutil.which("ln")),
+            },
+        })
+    except Exception as exc:
+        return failed("error", exc)
+
+
 def main():
     # 远端 locale 可能是 GBK/C/POSIX；统一以 UTF-8 输出，避免中文错误信息被重新编码。
     try:
@@ -1487,6 +1835,18 @@ def main():
             one_file_system="no-one-file-system" not in sys.argv,
             include_deleted_open="no-deleted-open" not in sys.argv,
         )
+    elif mode == "password_policy":
+        payload["passwordPolicy"] = collect_password_policy()
+    elif mode == "home_inspect":
+        arguments = (sys.argv[2:7] + [""] * 5)[:5]
+        payload["homeInspect"] = collect_home_inspect(*arguments)
+    elif mode == "tree_stats":
+        payload["treeStats"] = collect_tree_stats(sys.argv[2] if len(sys.argv) > 2 else "/")
+    elif mode == "dataset_inspect":
+        arguments = (sys.argv[2:5] + [""] * 3)[:3]
+        payload["datasetInspect"] = collect_dataset_inspect(*arguments)
+    elif mode == "account_info":
+        payload["accountInfo"] = collect_account_info(sys.argv[2] if len(sys.argv) > 2 else "")
     else:
         payload["sections"] = {
             "system": collect_system(),

@@ -41,15 +41,15 @@ describe("HostDetailPage tabs", () => {
     await waitFor(() => expect(metricsTab).toHaveFocus());
 
     await user.keyboard("{End}");
-    expect(screen.getByRole("tab", { name: "用户" })).toHaveAttribute("aria-selected", "true");
-    await waitFor(() => expect(screen.getByRole("tab", { name: "用户" })).toHaveFocus());
+    expect(screen.getByRole("tab", { name: "账户" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(screen.getByRole("tab", { name: "账户" })).toHaveFocus());
 
     await user.keyboard("{Home}");
     expect(screen.getByRole("tab", { name: "概览" })).toHaveAttribute("aria-selected", "true");
     await waitFor(() => expect(screen.getByRole("tab", { name: "概览" })).toHaveFocus());
 
     await user.keyboard("{ArrowLeft}");
-    expect(screen.getByRole("tab", { name: "用户" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "账户" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("fetches only the active tab and unmounts it when switching", async () => {

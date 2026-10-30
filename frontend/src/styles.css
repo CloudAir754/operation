@@ -2558,3 +2558,192 @@ textarea:disabled {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* --------------------------------------------------------------------------
+   Account lifecycle (stage 4)
+   -------------------------------------------------------------------------- */
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px 16px;
+}
+
+.form-hint {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.subsection-title {
+  margin: 4px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-soft);
+}
+
+.input--narrow {
+  width: 96px;
+}
+
+.check-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.check-list__item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 4px 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--panel-alt);
+  font-size: 12.8px;
+}
+
+.check-list__item--ok {
+  border-color: rgba(52, 211, 153, 0.32);
+}
+
+.check-list__item--bad {
+  border-color: rgba(248, 113, 113, 0.42);
+  background: rgba(248, 113, 113, 0.06);
+}
+
+.check-list__item--warn {
+  border-color: rgba(251, 191, 36, 0.34);
+}
+
+.check-list__mark {
+  font-weight: 700;
+  text-align: center;
+}
+
+.check-list__item--ok .check-list__mark {
+  color: var(--success);
+}
+
+.check-list__item--bad .check-list__mark {
+  color: var(--danger);
+}
+
+.check-list__item--warn .check-list__mark {
+  color: var(--warning);
+}
+
+.check-list__label {
+  color: var(--text-soft);
+}
+
+.check-list__detail {
+  grid-column: 2;
+  color: var(--text-muted);
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.rules-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 16px;
+  padding: 10px 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: rgba(56, 189, 248, 0.04);
+}
+
+.rules-preview__label {
+  display: block;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.rules-preview__value {
+  font-size: 18px;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+}
+
+.diff-block {
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-deep);
+  color: var(--text-soft);
+  font-size: 12.4px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.stage-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: stage;
+}
+
+.stage-list__item {
+  padding: 4px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.stage-list__item--done {
+  border-color: rgba(52, 211, 153, 0.32);
+  color: var(--success);
+}
+
+.stage-list__item--active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(56, 189, 248, 0.08);
+}
+
+details.details {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  background: var(--panel-alt);
+}
+
+details.details > summary {
+  cursor: pointer;
+  color: var(--text-soft);
+  font-size: 12.8px;
+}
+
+details.details[open] > summary {
+  margin-bottom: 8px;
+}
+
+.data-table--compact {
+  min-width: 520px;
+}
+
+.data-table--compact input[type="text"],
+.data-table--compact input[type="password"] {
+  width: 100%;
+}
+
+.data-table--policy {
+  min-width: 720px;
+}
+
+.data-table--policy input[type="number"] {
+  width: 96px;
+}

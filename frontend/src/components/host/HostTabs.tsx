@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import type { KeyboardEvent } from "react";
 
-export type HostTabId = "overview" | "metrics" | "gpu" | "storage" | "users";
+export type HostTabId = "overview" | "metrics" | "gpu" | "storage" | "users" | "accounts";
 
 export interface HostTabDefinition {
   id: HostTabId;
@@ -14,6 +14,7 @@ export const HOST_TABS: readonly HostTabDefinition[] = [
   { id: "gpu", label: "GPU" },
   { id: "storage", label: "磁盘空间" },
   { id: "users", label: "用户" },
+  { id: "accounts", label: "账户" },
 ];
 
 export function isHostTabId(value: string | null | undefined): value is HostTabId {

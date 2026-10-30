@@ -77,8 +77,6 @@
   权限错误 `incomplete` 传播、deleted-open 文件、min size/uid/扩展名/时间过滤、treemap 与目录/最大文件/UID 汇总。
 - [x] D：可登录用户、主组/附加组、home 摘要、sudo 三态（`组成员`/`策略存在`/`有效权限`），
   `unknown` 不折算为 `false`；按 UID 的空间扫描复用 C 的扫描管线。
-- [ ] 受控命令之外的批量任务、账户同步、SSH 公钥管理（需先补需求与安全验收，仍未开始）。
-- [ ] AMD/Intel GPU 适配器（规划中的后续项，首版仅 NVIDIA）。
 - [ ] 逐目录的实时进度（当前为阶段式进度：queued → scanning → aggregating → chunking → done）。
 
 证据：`uv run pytest`（275 passed，1 skipped）覆盖指标差分与回绕、GPU 缺失/多卡/MIG/不可见进程、
@@ -86,7 +84,38 @@
 前端 `npm test`（46 passed）覆盖五个页签、图表降级、GPU 进程过滤排序、扫描进度/取消/treemap、sudo 三态；
 界面截图见 `docs/screenshots/06-metrics.png`、`07-gpu.png`、`08-storage.png`、`09-users.png`。
 
-### 4.4 复验命令
+### 4.4 阶段四：账户生命周期（新建用户 / 目录迁移 / 新空间）
+
+详细需求见 [账户生命周期](account-lifecycle.md)，接口契约见 [api.md §9](api.md)，
+安全边界见 [security.md §9](security.md)。
+
+- [x] 随机密码只用 `secrets.SystemRandom`（`os.urandom`）；可设置长度、字符类别与符号集合，
+  可排除易混淆字符；规则冲突返回字段级 422；PAM 更严格时自动提高并列出原因。
+- [x] 读取**实际生效**的 PAM/pwquality 配置（PAM 行内参数优先），能力检测覆盖
+  `pwquality.conf`、PAM 模块行、`pwscore`/`chage`/`useradd`/`rsync` 与 drop-in 目录；
+  能力缺失时整体只读。
+- [x] 策略写入先展示 unified diff 并二次确认，备份到 `/var/backups/labopspanel/`，
+  写入后重新读取比对 + `pwscore` 行为验证，失败自动恢复；支持按记录恢复修改前配置。
+- [x] 不覆盖无法识别的手工 PAM 配置：未知键与注释原样保留，有歧义的 PAM 行该字段只读。
+- [x] 批量新建用户（≤50）：逐个执行并逐个记录结果；密码经 0600 临时文件 + `chpasswd`
+  写入，不进入 argv；生成密码只存在内存并一次性下发，不落库、不入审计。
+- [x] 目录迁移 9 阶段状态机：预检 / 空间 / 冻结 / 改名 / rsync / 校验 / 切换 / 恢复 / 观察；
+  只允许本地 ext4；冻结后确认无残留进程；失败保留原目录且不建链接。
+- [x] 迁移中断可识别阶段并 `resume`（先核对远端状态）或 `rollback`；
+  功能验证失败自动回退；清理入口只在成功观察阶段可用，且复核任务 ID、备份路径、
+  目标路径与链接关系。
+- [x] 新空间分配：保存 `dataRoot`/`migrationRoot`，创建 `0750` 目录并建立 home 下符号链接，
+  以该用户身份验证可写；解除链接只删除链接，不删除数据。
+- [x] 前端新增「账户」页签：两层密码说明、每处提权操作标注「需要 sudo」、sudo 密码录入卡片、
+  脱敏示例与规则检查、策略 diff 确认、批次结果与一次性密码、迁移阶段与回退/清理入口。
+- [ ] SSH 公钥管理与跨主机批量变更（仍不在首版范围）。
+
+证据：`uv run pytest`（352 passed，1 skipped）覆盖密码生成与下限合并、PAM/pwquality 解析与
+最小化改写、策略备份/验证/恢复、批量建用户（含“密码不进入 argv”）、迁移 9 阶段与
+中断/恢复/回退/清理、空间分配与错误码；前端 `npm test`（51 passed）覆盖账户页签的两层密码、
+脱敏示例、策略 diff 确认、批次密码一次性展示与预检阻断。
+
+### 4.5 复验命令
 
 ```powershell
 uv sync --extra dev

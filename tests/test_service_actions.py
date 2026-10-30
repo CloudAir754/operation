@@ -186,8 +186,9 @@ def test_collect_snapshot_plan_uses_probe(registry: ActionRegistry) -> None:
     steps = registry.build_plan(spec, params, sudo_password=None)
 
     assert spec.persist_snapshot is True
-    assert "base64 -d" in steps[0].command
+    assert "base64" not in steps[0].command
     assert steps[0].command.endswith("snapshot")
+    assert '"$PY" -' in steps[0].command
 
 
 def test_action_errors_expose_api_payload(registry: ActionRegistry) -> None:

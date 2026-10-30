@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
-from lab_ops_panel.remote.probe import PROBE_SOURCE, build_probe_command
+from lab_ops_panel.remote.probe import PROBE_SOURCE, PROBE_VERSION, build_probe_command
 
 
 @pytest.fixture
@@ -230,7 +234,31 @@ def test_collect_storage_node_cap_marks_truncated(probe_ns, fake_proc, tmp_path)
 def test_probe_command_quotes_arguments() -> None:
     command = build_probe_command("storage", ["/data/my logs", "3"])
 
-    assert command.endswith("storage '/data/my logs' 3")
+    assert command.endswith("- storage '/data/my logs' 3")
+
+
+def test_probe_source_runs_from_stdin(tmp_path: Path) -> None:
+    """回归：探针必须能通过 ``python3 -`` 从 stdin 执行（避免命令行超长）。"""
+
+    result = subprocess.run(
+        [sys.executable, "-", "snapshot"],
+        input=PROBE_SOURCE.encode("utf-8"),
+        capture_output=True,
+        timeout=120,
+    )
+
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    payload = json.loads(result.stdout.decode("utf-8"))
+    assert payload["probeVersion"] == PROBE_VERSION
+    assert set(payload["sections"]) == {
+        "system",
+        "cpu",
+        "memory",
+        "disks",
+        "network",
+        "gpu",
+        "services",
+    }
 
 
 @pytest.mark.parametrize("argument", ["bad\nmount", "bad\x00value"])

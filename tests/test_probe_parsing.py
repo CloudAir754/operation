@@ -39,13 +39,28 @@ def _result(**overrides) -> CommandResult:
     return CommandResult(**defaults)
 
 
-@pytest.mark.parametrize("mode", ["snapshot", "services"])
-def test_probe_command_embeds_encoded_source(mode: str) -> None:
+@pytest.mark.parametrize("mode", ["snapshot", "services", "metrics", "gpu", "users", "mounts"])
+def test_probe_command_stays_short_and_uses_stdin(mode: str) -> None:
     command = build_probe_command(mode)
 
-    assert "base64 -d" in command
+    assert "base64" not in command
     assert command.endswith(mode)
+    assert '"$PY" -' in command
     assert "/usr/bin/python3" in command
+    # Windows 命令行上限约 32767 字符；命令必须与探针源码大小无关。
+    assert len(command) < 500
+
+
+def test_run_probe_stdin_carries_source(probe_payload) -> None:
+    transport = FakeTransport(default_stdout=json.dumps(probe_payload()))
+
+    run_probe(transport, TARGET)
+
+    call = transport.calls[0]
+    assert call.stdin_data is not None
+    assert b"VERSION = " in call.stdin_data
+    assert b"collect_storage" in call.stdin_data
+    assert len(call.command) < 500
 
 
 def test_probe_command_rejects_unknown_mode() -> None:

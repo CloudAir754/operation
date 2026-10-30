@@ -20,6 +20,20 @@ DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024
 READ_CHUNK_SIZE = 8192
 TERMINATE_GRACE_SECONDS = 3.0
 
+_LONG_COMMAND_LINE_MESSAGE = (
+    "SSH 命令行超过 Windows 限制（约 32767 字符）；探针源码应通过 stdin 传入，而不是拼进 argv"
+)
+_WINDOWS_COMMAND_LINE_TOO_LONG = frozenset({87, 206})
+
+
+def _command_line_too_long(exc: OSError) -> bool:
+    """CreateProcess 在参数过长时返回 WinError 87/206，而不是 ENOENT。"""
+
+    winerror = getattr(exc, "winerror", None)
+    if winerror in _WINDOWS_COMMAND_LINE_TOO_LONG:
+        return True
+    return getattr(exc, "errno", None) == 206
+
 
 class TransportError(RuntimeError):
     """本机传输层故障（缺少 ssh 客户端等），并非远端执行失败。"""
@@ -173,10 +187,14 @@ class OpenSshTransport:
                 creationflags=creation_flags,
             )
         except FileNotFoundError as exc:
+            if _command_line_too_long(exc):
+                raise TransportError(_LONG_COMMAND_LINE_MESSAGE) from exc
             raise TransportError(
                 f"找不到 SSH 客户端 {self.ssh_binary!r}；请安装 Windows OpenSSH 客户端"
             ) from exc
         except OSError as exc:  # pragma: no cover - 平台相关
+            if _command_line_too_long(exc):
+                raise TransportError(_LONG_COMMAND_LINE_MESSAGE) from exc
             raise TransportError(f"启动 SSH 客户端失败：{exc}") from exc
 
         stdout_buffer = bytearray()
@@ -203,15 +221,22 @@ class OpenSshTransport:
         stdout_thread.start()
         stderr_thread.start()
 
+        stdin_thread: threading.Thread | None = None
         if stdin_data is not None and process.stdin is not None:
-            try:
-                process.stdin.write(stdin_data)
-                process.stdin.flush()
-            except (BrokenPipeError, OSError):
-                pass
-            finally:
-                with contextlib.suppress(OSError):
-                    process.stdin.close()
+
+            def write_stdin() -> None:
+                try:
+                    process.stdin.write(stdin_data)  # type: ignore[union-attr]
+                    process.stdin.flush()  # type: ignore[union-attr]
+                except (BrokenPipeError, OSError):
+                    pass
+                finally:
+                    with contextlib.suppress(OSError):
+                        process.stdin.close()  # type: ignore[union-attr]
+
+            # 探针源码可达数十 KB；放到线程里写，避免阻塞进程时无法执行超时/取消。
+            stdin_thread = threading.Thread(target=write_stdin, daemon=True)
+            stdin_thread.start()
 
         deadline = time.monotonic() + effective_timeout if effective_timeout else None
         cancelled = False
@@ -237,6 +262,8 @@ class OpenSshTransport:
 
         stdout_thread.join(timeout=TERMINATE_GRACE_SECONDS)
         stderr_thread.join(timeout=TERMINATE_GRACE_SECONDS)
+        if stdin_thread is not None:
+            stdin_thread.join(timeout=TERMINATE_GRACE_SECONDS)
 
         duration_ms = int((time.monotonic() - started) * 1000)
         exit_code = None if (timed_out or cancelled) else process.returncode

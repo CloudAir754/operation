@@ -1,7 +1,8 @@
 """远端探针：一次性 Python 输入，不安装常驻 Agent。
 
-探针脚本以 base64 传输，避免远端 shell 引号差异；输出为单个 JSON 文档，
-每个分区都带 status/error，缺少权限或硬件能力时绝不伪造零值。
+探针源码通过 SSH 标准输入传给远端 ``python3 -``，避免 Windows 命令行长度限制
+（WinError 206）；输出为单个 JSON 文档，每个分区都带 status/error/requiresSudo，
+缺少权限或硬件能力时绝不伪造零值。
 
 模式：
 - ``snapshot`` 系统/资源/磁盘/网络/GPU/服务总览
@@ -15,7 +16,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import re
 import shlex
@@ -1456,6 +1456,11 @@ def collect_storage(mount, max_depth=3, follow_symlinks=False, one_file_system=T
 
 
 def main():
+    # 远端 locale 可能是 GBK/C/POSIX；统一以 UTF-8 输出，避免中文错误信息被重新编码。
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     mode = sys.argv[1] if len(sys.argv) > 1 else "snapshot"
     collected_at = to_iso(time.time())
     payload = {"probeVersion": VERSION, "collectedAt": collected_at, "mode": mode}
@@ -1508,6 +1513,13 @@ class ProbeError(RuntimeError):
 
 
 def build_probe_command(mode: str = "snapshot", args: list[str] | None = None) -> str:
+    """构造远端 python3 命令；探针源码通过 stdin 传入。
+
+    Windows 的 CreateProcess 命令行上限约 32767 字符，把 base64 探针塞进 argv
+    会触发 WinError 206。这里只传模式与简短参数，源码由 ``run_probe`` 写入
+    SSH 的标准输入，远端用 ``python3 -`` 读取。
+    """
+
     if mode not in PROBE_MODES:
         raise ValueError(f"未知探针模式：{mode}")
     normalized_args: list[str] = []
@@ -1516,11 +1528,10 @@ def build_probe_command(mode: str = "snapshot", args: list[str] | None = None) -
         if not _SAFE_ARGUMENT.match(text):
             raise ValueError(f"探针参数不合法：{text!r}")
         normalized_args.append(text)
-    encoded = base64.b64encode(PROBE_SOURCE.encode("utf-8")).decode("ascii")
     invocation = " ".join([mode, *(shlex.quote(item) for item in normalized_args)]).strip()
     return (
         "if [ -x /usr/bin/python3 ]; then PY=/usr/bin/python3; else PY=python3; fi; "
-        f'printf %s {shlex.quote(encoded)} | base64 -d | "$PY" - {invocation}'
+        f'"$PY" - {invocation}'
     )
 
 
@@ -1574,6 +1585,7 @@ def run_probe(
         command,
         timeout=timeout,
         cancel_event=cancel_event,
+        stdin_data=PROBE_SOURCE.encode("utf-8"),
         max_output_bytes=max_output_bytes,
     )
     _require_ok(result, operation)

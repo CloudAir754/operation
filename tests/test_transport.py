@@ -172,6 +172,31 @@ def test_missing_ssh_binary_raises_transport_error(tmp_path: Path) -> None:
         transport.run(_target(), "true", timeout=5)
 
 
+def test_long_command_line_is_reported_explicitly(monkeypatch) -> None:
+    """回归：WinError 206 不应被误报成“找不到 ssh”。"""
+
+    def boom(*_args, **_kwargs):
+        raise FileNotFoundError(206, "文件名或扩展名太长")
+
+    monkeypatch.setattr("lab_ops_panel.ssh.transport.subprocess.Popen", boom)
+    transport = OpenSshTransport(ssh_binary="ssh")
+
+    with pytest.raises(TransportError, match="命令行超过 Windows 限制"):
+        transport.run(_target(), "true", timeout=5)
+
+
+def test_large_stdin_does_not_block_timeout(tmp_path: Path) -> None:
+    """探针源码经 stdin 传输；写满管道时仍必须能超时终止。"""
+
+    transport = OpenSshTransport(ssh_binary=str(_bat(tmp_path, ":loop\r\ngoto loop\r\n")))
+    started = time.monotonic()
+
+    result = transport.run(_target(), "sleep", timeout=0.5, stdin_data=b"x" * (512 * 1024))
+
+    assert result.timed_out is True
+    assert time.monotonic() - started < 8
+
+
 def test_command_result_combined_output() -> None:
     result = CommandResult(
         argv=[],

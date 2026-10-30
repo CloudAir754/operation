@@ -16,7 +16,7 @@ from pydantic import BaseModel, ValidationError
 from lab_ops_panel.config import Settings
 from lab_ops_panel.errors import ApiError, ValidationFailedError
 from lab_ops_panel.remote.logs import build_journalctl_command
-from lab_ops_panel.remote.probe import build_probe_command
+from lab_ops_panel.remote.probe import PROBE_SOURCE, build_probe_command
 from lab_ops_panel.remote.services import (
     ProtectedServiceError,
     UnitValidationError,
@@ -69,6 +69,8 @@ class PlanStep:
     timeout_seconds: float
     use_sudo: bool = False
     allow_failure: bool = False
+    # 需要写入远端 stdin 的负载（探针源码）；sudo 步骤已占用 stdin 传密码，二者不能并存。
+    stdin_data: bytes | None = None
 
 
 @dataclass
@@ -234,6 +236,7 @@ def _snapshot_build(params: BaseModel, ctx: ActionContext) -> list[PlanStep]:
             name="采集状态",
             command=build_probe_command("snapshot"),
             timeout_seconds=ctx.action_timeout_seconds,
+            stdin_data=PROBE_SOURCE.encode("utf-8"),
         )
     ]
 

@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from lab_ops_panel.app import create_app
 from lab_ops_panel.config import Settings
 from lab_ops_panel.models import Server, Task, TaskStep
+from lab_ops_panel.remote.probe import PROBE_SOURCE
 from lab_ops_panel.ssh.transport import CommandResult, FakeTransport, TransportError
 
 
@@ -399,6 +400,9 @@ def test_collect_snapshot_persists_cache(
     assert snapshot["status"] == "ok"
     assert snapshot["data"]["system"]["data"]["hostname"] == "lab-01"
     assert len(transport.calls) == 1
+    # 回归：探针源码必须走 stdin，argv 里只有模式参数，否则 Windows 报 WinError 206。
+    assert transport.calls[0].command.endswith("- snapshot")
+    assert transport.calls[0].stdin_data == PROBE_SOURCE.encode("utf-8")
 
 
 def test_output_tail_is_bounded(

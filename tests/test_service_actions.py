@@ -13,6 +13,7 @@ from lab_ops_panel.remote.actions import (
     UnknownActionError,
     build_registry,
 )
+from lab_ops_panel.remote.probe import PROBE_SOURCE
 from lab_ops_panel.remote.services import (
     ProtectedServiceError,
     UnitValidationError,
@@ -140,6 +141,21 @@ def test_service_unit_is_normalized_to_service_suffix(registry: ActionRegistry) 
     assert steps[1].use_sudo is True
     assert steps[0].command.startswith("systemctl show nginx.service")
     assert steps[2].allow_failure is True
+
+
+def test_collect_snapshot_step_streams_probe_source_over_stdin(
+    registry: ActionRegistry,
+) -> None:
+    """回归：采集状态步骤把探针源码放进 stdin，命令行保持短小。"""
+
+    spec, params = registry.validate("collect_snapshot", {}, sudo_password=None)
+    steps = registry.build_plan(spec, params, sudo_password=None)
+
+    assert len(steps) == 1
+    assert steps[0].use_sudo is False
+    assert steps[0].command.endswith("- snapshot")
+    assert len(steps[0].command) < 200
+    assert steps[0].stdin_data == PROBE_SOURCE.encode("utf-8")
 
 
 def test_run_command_is_disabled_by_default(registry: ActionRegistry) -> None:

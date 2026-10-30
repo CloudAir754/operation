@@ -181,7 +181,7 @@ class OpenSshTransport:
         try:
             process = subprocess.Popen(  # noqa: S603 - 参数为 argv 列表，不经过 shell
                 argv,
-                stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 creationflags=creation_flags,
@@ -222,21 +222,27 @@ class OpenSshTransport:
         stderr_thread.start()
 
         stdin_thread: threading.Thread | None = None
-        if stdin_data is not None and process.stdin is not None:
+        if process.stdin is not None:
+            if stdin_data is None:
+                # Windows 上把 NUL 设备交给 ssh 时，远端读取标准输入的命令收不到 EOF，
+                # 会一直挂到超时；显式关闭管道等价于 ssh -n。
+                with contextlib.suppress(OSError):
+                    process.stdin.close()
+            else:
 
-            def write_stdin() -> None:
-                try:
-                    process.stdin.write(stdin_data)  # type: ignore[union-attr]
-                    process.stdin.flush()  # type: ignore[union-attr]
-                except (BrokenPipeError, OSError):
-                    pass
-                finally:
-                    with contextlib.suppress(OSError):
-                        process.stdin.close()  # type: ignore[union-attr]
+                def write_stdin() -> None:
+                    try:
+                        process.stdin.write(stdin_data)  # type: ignore[union-attr]
+                        process.stdin.flush()  # type: ignore[union-attr]
+                    except (BrokenPipeError, OSError):
+                        pass
+                    finally:
+                        with contextlib.suppress(OSError):
+                            process.stdin.close()  # type: ignore[union-attr]
 
-            # 探针源码可达数十 KB；放到线程里写，避免阻塞进程时无法执行超时/取消。
-            stdin_thread = threading.Thread(target=write_stdin, daemon=True)
-            stdin_thread.start()
+                # 探针源码可达数十 KB；放到线程里写，避免阻塞进程时无法执行超时/取消。
+                stdin_thread = threading.Thread(target=write_stdin, daemon=True)
+                stdin_thread.start()
 
         deadline = time.monotonic() + effective_timeout if effective_timeout else None
         cancelled = False

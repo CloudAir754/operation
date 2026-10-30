@@ -515,9 +515,14 @@ class TaskManager:
     @staticmethod
     def _prepare_command(step: PlanStep, password: str | None) -> tuple[str, bytes | None]:
         if not step.use_sudo:
-            return step.command, None
+            return step.command, step.stdin_data
         if password is None:
             raise ApiError(409, "sudo_password_missing", "未保存 sudo 密码，无法提权执行")
+        if step.stdin_data is not None:
+            # sudo -S 会先读走 stdin 的首行密码，负载无法可靠地交给被执行的命令。
+            raise ApiError(
+                500, "step_stdin_conflict", "该步骤同时需要 sudo 密码与标准输入，无法执行"
+            )
         return f"sudo -S -p '' {step.command}", (password + "\n").encode("utf-8")
 
     def _create_steps(self, task_id: str, steps: list[PlanStep]) -> dict[int, int] | None:

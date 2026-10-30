@@ -609,6 +609,11 @@ def test_storage_scan_lifecycle(
     audit = client.get("/api/audit").json()["entries"]
     assert any(entry["action"] == "storage_scan" for entry in audit)
 
+    listing = client.get(f"/api/servers/{server_id}/storage/scans").json()
+    assert listing["count"] == 1
+    assert listing["scans"][0]["nodes"] == []
+    assert listing["scans"][0]["nodeCount"] == scan["nodeCount"]
+
 
 def test_storage_scan_rejects_unknown_mount(
     client: TestClient, add_server, transport: FakeTransport

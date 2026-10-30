@@ -49,6 +49,8 @@ MAX_DEVICES = 200
 MAX_INTERFACES = 200
 MAX_PROCESSES = 200
 MAX_USERS = 500
+MAX_HOME_SCANS = 50
+HOME_BUDGET_SECONDS = 8.0
 MAX_SCAN_NODES = 1200
 MAX_DELETED_OPEN = 100
 MAX_TEXT = 300
@@ -997,7 +999,7 @@ def home_storage(home, depth=2, cap=20000, deadline=2.0):
     return stats
 
 
-def sudo_policy_present(login, groups):
+def load_sudoers():
     readable = False
     lines = []
     sudoers = read_text("/etc/sudoers", 131072)
@@ -1013,6 +1015,10 @@ def sudo_policy_present(login, groups):
         if text:
             readable = True
             lines.extend(text.splitlines())
+    return readable, lines
+
+
+def sudo_policy_present(login, groups, readable, lines):
     if not readable:
         return None
     names = set([login])
@@ -1047,6 +1053,10 @@ def collect_users(include_system=False):
         threshold = 1000
         groups = parse_groups()
         passwd = parse_passwd()
+        readable_sudoers, policy_lines = load_sudoers()
+        started = time.time()
+        home_scans = 0
+        home_skipped = False
         self_login = None
         try:
             import pwd
@@ -1075,6 +1085,13 @@ def collect_users(include_system=False):
                 entry["login"] in groups.get(name, {}).get("members", [])
                 for name in ("sudo", "wheel")
             )
+            storage = None
+            if os.path.isdir(entry["home"]):
+                if home_scans < MAX_HOME_SCANS and time.time() - started < HOME_BUDGET_SECONDS:
+                    storage = home_storage(entry["home"])
+                    home_scans += 1
+                else:
+                    home_skipped = True
             users.append({
                 "login": entry["login"],
                 "uid": uid,
@@ -1085,16 +1102,18 @@ def collect_users(include_system=False):
                 "primaryGroup": primary,
                 "supplementaryGroups": supplementary[:64],
                 "sudoGroupMember": group_member,
-                "sudoPolicyPresent": sudo_policy_present(entry["login"], groups),
+                "sudoPolicyPresent": sudo_policy_present(
+                    entry["login"], groups, readable_sudoers, policy_lines
+                ),
                 "sudoEffective": sudo_effective(entry["login"], entry["login"] == self_login),
                 "recentLogin": None,
-                "homeStorage": (
-                    home_storage(entry["home"]) if os.path.isdir(entry["home"]) else None
-                ),
+                "homeStorage": storage,
             })
         notes = []
         if self_login is None:
             notes.append("无法确定当前 SSH 用户，sudo 有效性统一标记为 unknown")
+        if home_skipped:
+            notes.append("home 空间摘要达到时间/数量预算，其余用户的 homeStorage 为 null")
         notes.append("sudo 有效权限仅对当前 SSH 用户执行非交互验证，其他用户为 unknown")
         notes.append("最近登录未采集（远端 lastlog 可能不可读）")
         return section(data={"thresholdUid": threshold, "users": users, "notes": notes})

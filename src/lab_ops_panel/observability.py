@@ -869,7 +869,10 @@ class ObservabilityService:
                     select(Server).where(Server.id.in_({row.server_id for row in rows}))
                 )
             }
-            return [self._row_to_out(row, aliases.get(row.server_id, "")) for row in rows]
+            return [
+                self._row_to_out(row, aliases.get(row.server_id, ""), include_nodes=False)
+                for row in rows
+            ]
 
     def cancel_scan(self, scan_id: str) -> StorageScanOut:
         with session_scope(self._session_factory) as session:
@@ -923,11 +926,13 @@ class ObservabilityService:
     # 输出与事件
     # ------------------------------------------------------------------
 
-    def _row_to_out(self, row: StorageScan, alias: str) -> StorageScanOut:
+    def _row_to_out(
+        self, row: StorageScan, alias: str, *, include_nodes: bool = True
+    ) -> StorageScanOut:
         request = dict(row.request or {})
         result = row.result if isinstance(row.result, dict) else {}
-        nodes = self._parse_nodes(result.get("nodes"))
-        largest = self._parse_nodes(result.get("largest_files"))
+        nodes = self._parse_nodes(result.get("nodes")) if include_nodes else []
+        largest = self._parse_nodes(result.get("largest_files")) if include_nodes else []
         summary = []
         for item in result.get("summary_by_uid") or []:
             try:

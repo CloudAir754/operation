@@ -14,7 +14,14 @@ frontend/dist/
 
 # Local runtime state (never in the source tree)
 *.db
+*.db-wal
+*.db-shm
 *.sqlite3
 *.log
 .env
 .env.*
+
+# OS noise
+Thumbs.db
+desktop.ini
+.DS_Store

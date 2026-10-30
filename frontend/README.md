@@ -14,7 +14,7 @@ LabOpsPanel 的浏览器客户端：Windows 本机 Web 控制台，通过后端 
 ```powershell
 # 1. 在仓库根目录启动后端（另开一个终端）
 uv sync --extra dev
-uv run uvicorn lab_ops_panel.app:app --reload --host 127.0.0.1 --port 8765
+uv run uvicorn lab_ops_panel.app:create_app --factory --reload --host 127.0.0.1 --port 8765
 
 # 2. 安装前端依赖并启动开发服务器
 cd frontend
@@ -46,8 +46,12 @@ npm run dev
 | --- | --- | --- |
 | `/` | 主机总览 | `GET /api/servers`、`GET /api/ssh-config`、`POST /api/servers/import`、连接测试 |
 | `/hosts/:id` | 主机详情 | `GET /api/servers/{id}/snapshot`、`GET /api/servers/{id}/logs`、`POST /api/tasks` |
+| `/hosts/:id?tab=accounts` | 账户生命周期 | `/api/accounts/generator`、`/api/servers/{id}/accounts/policy`、`/api/servers/{id}/account-batches`、`/api/servers/{id}/home-migrations`、`/api/servers/{id}/datasets` |
 | `/tasks` | 维护任务 | `GET /api/tasks`、`GET /api/tasks/{id}/events`（SSE）、取消任务 |
 | `/hosts/:id/settings` | 主机设置 | `PATCH /api/servers/{id}`、`PUT/DELETE /api/servers/{id}/secret`、`GET /api/settings` |
+
+主机详情有「概览 / 资源 / GPU / 磁盘空间 / 用户 / 账户」六个页签，`?tab=` 可深链接；
+只有激活的页签会发请求。
 
 接口契约见仓库根目录 `docs/requirements/api.md`。所有时间按 UTC ISO 8601 接收，
 界面按本地时区显示；缺少权限或驱动的指标显示明确状态，GPU 不可用时显示 `N/A`，
@@ -58,10 +62,10 @@ npm run dev
 ```text
 src/
   api/          typed client、ApiError 映射、契约类型
-  components/   布局、对话框、日志面板与通用 UI
-  hooks/        usePolling / useTasks / useTaskEvents / usePageTitle
+  components/   布局、对话框、日志面板、账户页签与通用 UI
+  hooks/        usePolling / useTasks / useTaskEvents / useStorageScanEvents / usePageTitle
   lib/          格式化、中文标签、幂等键
-  pages/        四个页面
+  pages/        四个路由页面 + 主机详情页签测试
   test/         Vitest setup、fetch/EventSource mock、fixtures
   styles.css    深色主题样式（唯一样式入口）
 ```

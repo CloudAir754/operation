@@ -1,6 +1,6 @@
 # LabOpsPanel
 
-Windows 本机运行、通过 SSH 管理 Linux 主机的 Web 控制台。浏览器打开本地页面即可查看多台服务器状态、读取日志、启停 systemd 服务，并查看资源趋势、GPU 进程、磁盘空间树与用户空间归属，无需在远端安装常驻 Agent。
+Windows 本机运行、通过 SSH 管理 Linux 主机的 Web 控制台。浏览器打开本地页面即可查看多台服务器状态、读取日志、启停 systemd 服务，查看资源趋势、GPU 进程、磁盘空间树与用户空间归属，并批量创建账户、调整 Ubuntu 密码策略、迁移用户目录与分配数据盘空间，无需在远端安装常驻 Agent。
 
 - 后端：Python 3.12 + FastAPI + SQLAlchemy + Alembic + SQLite，SSH 复用 Windows OpenSSH 客户端。
 - 前端：React + TypeScript + Vite，REST 拉取快照与指标、SSE 订阅长任务与空间扫描进度。
@@ -47,7 +47,7 @@ cd frontend; npm run dev
 | --- | --- |
 | ![维护任务](docs/screenshots/03-tasks.png) | ![主机设置](docs/screenshots/04-settings.png) |
 
-主机详情提供「概览 / 资源 / GPU / 磁盘空间 / 用户」五个页签：
+主机详情提供「概览 / 资源 / GPU / 磁盘空间 / 用户 / 账户」六个页签：
 
 | 资源趋势 | GPU 监控 |
 | --- | --- |
@@ -56,6 +56,10 @@ cd frontend; npm run dev
 | 磁盘空间 | 用户与 sudo |
 | --- | --- |
 | ![磁盘空间](docs/screenshots/08-storage.png) | ![用户与 sudo](docs/screenshots/09-users.png) |
+
+「账户」页签把两层密码分开：运维 sudo 密码（DPAPI 加密保存）与新建账户的初始密码
+（一次性展示、不落库），并提供密码规则、系统策略、批量建用户、目录迁移与空间分配的入口。
+详见 [账户生命周期需求](docs/requirements/account-lifecycle.md)。
 
 采集失败时按分区展示原因，GPU 缺失显示 `N/A`（见 [错误态截图](docs/screenshots/05-host-detail-error.png)）。
 
@@ -119,6 +123,7 @@ docs/requirements/      需求、架构、验收与 API 契约
 
 - [需求与边界](docs/requirements/README.md)
 - [架构与实现要求](docs/requirements/architecture.md)
+- [账户生命周期](docs/requirements/account-lifecycle.md)
 - [验收标准与实施状态](docs/requirements/acceptance.md)
 - [API 契约](docs/requirements/api.md)
 - [安全设计与残余风险](docs/requirements/security.md)
@@ -131,4 +136,7 @@ docs/requirements/      需求、架构、验收与 API 契约
 - GPU 仅支持 NVIDIA（`nvidia-smi`）；无驱动时返回 `unavailable`，不会伪造数据；AMD/Intel 适配器未实现。
 - 指标历史只保存在内存中，应用重启后清空；空间扫描进度为阶段式（连接/扫描/聚合/分块），不是逐目录实时进度。
 - 磁盘空间扫描不读取文件内容，只统计元数据；权限不足或达到深度/节点上限时标记 `incomplete`/`truncated`。
-- 首版不包含多用户、批量变更、磁盘格式化与 SSH 公钥管理。
+- 账户操作只针对单台主机：不支持跨主机批量变更、SSH 公钥管理、磁盘格式化与账户自动删除。
+- 用户目录迁移首版只允许**本地 ext4**；XFS/Btrfs/ZFS/网络文件系统只读展示并拒绝迁移。
+- 密码策略只管理 `pwquality.conf` 与可识别的 PAM 行内参数；首版不设置首次登录强制改密，
+  也不管理密码最长/最短使用天数与周期性到期。

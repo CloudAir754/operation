@@ -20,6 +20,7 @@ from lab_ops_panel.config import Settings
 from lab_ops_panel.db import create_db_engine, create_session_factory
 from lab_ops_panel.errors import ApiError, api_error_handler
 from lab_ops_panel.migrations_runner import upgrade_database
+from lab_ops_panel.observability import ObservabilityService
 from lab_ops_panel.remote.actions import build_registry
 from lab_ops_panel.secrets_store import CredentialStore, SecretProtector
 from lab_ops_panel.snapshots import SnapshotService
@@ -53,6 +54,12 @@ def create_app(
     event_bus = EventBus()
     registry = build_registry(resolved)
     snapshots = SnapshotService(session_factory, ssh_transport, resolved)
+    observability = ObservabilityService(
+        session_factory=session_factory,
+        transport=ssh_transport,
+        settings=resolved,
+        bus=event_bus,
+    )
     tasks = TaskManager(
         session_factory=session_factory,
         transport=ssh_transport,
@@ -72,6 +79,7 @@ def create_app(
         event_bus=event_bus,
         tasks=tasks,
         snapshots=snapshots,
+        observability=observability,
         version=__version__,
     )
 
@@ -81,6 +89,9 @@ def create_app(
         interrupted = container.tasks.recover_on_startup()
         if interrupted:
             logger.warning("启动时将 %d 个未完成任务标记为 interrupted", interrupted)
+        interrupted_scans = container.observability.recover_scans()
+        if interrupted_scans:
+            logger.warning("启动时将 %d 个未完成空间扫描标记为 interrupted", interrupted_scans)
         logger.info(
             "LabOpsPanel %s 已启动，监听 %s:%s，SSH 配置：%s",
             __version__,
@@ -92,6 +103,7 @@ def create_app(
             yield
         finally:
             container.tasks.shutdown()
+            container.observability.shutdown()
             engine.dispose()
 
     app = FastAPI(

@@ -14,9 +14,11 @@ from fastapi.testclient import TestClient
 from lab_ops_panel.app import create_app
 from lab_ops_panel.config import Settings
 from lab_ops_panel.models import Server
+from lab_ops_panel.remote.probe import PROBE_VERSION
 from lab_ops_panel.ssh.transport import FakeTransport
 
 TERMINAL_TASK_STATUSES = ("succeeded", "failed", "cancelled", "interrupted")
+TERMINAL_SCAN_STATUSES = ("succeeded", "failed", "cancelled", "interrupted")
 
 SSH_CONFIG_TEXT = """\
 # 测试用 SSH 配置
@@ -53,7 +55,7 @@ class MemoryProtector:
 
 
 BASE_PROBE_PAYLOAD: dict[str, Any] = {
-    "probeVersion": 1,
+    "probeVersion": PROBE_VERSION,
     "collectedAt": "2026-10-25T12:00:00Z",
     "sections": {
         "system": {
@@ -252,6 +254,44 @@ def probe_payload() -> Callable[..., dict[str, Any]]:
         return payload
 
     return build
+
+
+@pytest.fixture
+def probe_envelope() -> Callable[..., dict[str, Any]]:
+    """构造带协议版本与采样时间的探针响应，可同时包含多个模式分区。"""
+
+    def build(**sections: Any) -> dict[str, Any]:
+        return {
+            "probeVersion": PROBE_VERSION,
+            "collectedAt": "2026-10-30T12:00:00Z",
+            "mode": "snapshot",
+            **sections,
+        }
+
+    return build
+
+
+@pytest.fixture
+def wait_scan():
+    def _wait(
+        client: TestClient,
+        scan_id: str,
+        *,
+        timeout: float = 15.0,
+        statuses: tuple[str, ...] = TERMINAL_SCAN_STATUSES,
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + timeout
+        last: dict[str, Any] | None = None
+        while time.monotonic() < deadline:
+            response = client.get(f"/api/storage/scans/{scan_id}")
+            assert response.status_code == 200, response.text
+            last = response.json()
+            if last["status"] in statuses:
+                return last
+            time.sleep(0.02)
+        raise AssertionError(f"扫描 {scan_id} 未在 {timeout}s 内结束：{last}")
+
+    return _wait
 
 
 def wait_for_task(

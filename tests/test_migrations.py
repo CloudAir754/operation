@@ -17,6 +17,7 @@ CORE_TABLES = {
     "server_snapshots",
     "tasks",
     "task_steps",
+    "storage_scans",
     "audit_logs",
 }
 

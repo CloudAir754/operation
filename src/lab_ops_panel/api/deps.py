@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
     from lab_ops_panel.config import Settings
     from lab_ops_panel.models import Server
+    from lab_ops_panel.observability import ObservabilityService
     from lab_ops_panel.remote.actions import ActionRegistry
     from lab_ops_panel.secrets_store import CredentialStore
     from lab_ops_panel.snapshots import SnapshotService
@@ -35,6 +36,7 @@ class AppContainer:
     event_bus: EventBus
     tasks: TaskManager
     snapshots: SnapshotService
+    observability: ObservabilityService
     version: str
 
 

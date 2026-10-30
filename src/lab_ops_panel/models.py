@@ -192,6 +192,30 @@ class TaskStep(Base):
     task: Mapped[Task] = relationship(back_populates="steps")
 
 
+class StorageScan(Base):
+    """磁盘空间扫描任务；应用重启后未完成的扫描标记为 interrupted。"""
+
+    __tablename__ = "storage_scans"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    server_id: Mapped[int] = mapped_column(
+        ForeignKey("servers.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    mount: Mapped[str] = mapped_column(String(1024), nullable=False)
+    request: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
+    stage: Mapped[str] = mapped_column(String(32), default="queued", nullable=False)
+    progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    truncated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    node_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
 class AuditLog(Base):
     """审计只记录动作、目标、结果摘要，不记录凭据与完整输出。"""
 

@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from lab_ops_panel.app import create_app
 from lab_ops_panel.config import Settings
 from lab_ops_panel.models import Server, ServerSecret
+from lab_ops_panel.remote.probe import PROBE_VERSION
 from lab_ops_panel.ssh.transport import CommandResult, FakeTransport, TransportError
 
 
@@ -338,7 +339,7 @@ def test_services_endpoint_marks_protected_units(
     server_id = add_server()
     transport.default_stdout = json.dumps(
         {
-            "probeVersion": 1,
+            "probeVersion": PROBE_VERSION,
             "services": {
                 "status": "ok",
                 "error": None,

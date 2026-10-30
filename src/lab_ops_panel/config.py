@@ -65,6 +65,15 @@ class Settings(BaseSettings):
     max_concurrent_tasks: int = Field(default=3, ge=1, le=16)
     allow_arbitrary_commands: bool = False
 
+    metrics_retention_seconds: int = Field(default=3600, ge=60, le=21600)
+    metrics_max_points: int = Field(default=2400, ge=60, le=20000)
+    gpu_cache_ttl_seconds: int = Field(default=5, ge=0, le=120)
+    users_cache_ttl_seconds: int = Field(default=30, ge=0, le=300)
+    mounts_cache_ttl_seconds: int = Field(default=20, ge=0, le=300)
+    scan_timeout_seconds: float = Field(default=180.0, gt=0, le=1800)
+    scan_max_active_per_server: int = Field(default=1, ge=1, le=4)
+    scan_history_limit: int = Field(default=50, ge=1, le=500)
+
     audit_limit: int = Field(default=200, ge=1, le=5000)
 
     @field_validator("bind_host")

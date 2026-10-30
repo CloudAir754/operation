@@ -122,3 +122,73 @@ src/lab_ops_panel/
 - 后端 182 个用例覆盖解析、传输、DPAPI、探针、任务、迁移与 API；Windows 之外跳过 DPAPI 用例。
 - 传输层用 Windows 批处理模拟 ssh 客户端验证超时、取消、截断与 stdin；其余用例使用 `FakeTransport`。
 - 前端 20 个用例覆盖 API 错误映射、主机卡片、分区降级、确认对话框、任务取消与 SSE、密码设置/清除。
+
+## 7. 阶段三：资源观测实现
+
+### 7.1 探针模式
+
+同一份内嵌 Python 探针按模式执行，所有模式都返回 `probeVersion`、`collectedAt` 与
+带 `status/error/requiresSudo/data` 的分区：
+
+| 模式 | 用途 | 主要来源 | 上限 |
+| --- | --- | --- | --- |
+| `metrics` | 累计计数与静态信息 | `/proc/stat`、`meminfo`、`vmstat`、`diskstats`、`net/dev`、sysfs | 200 设备 / 200 接口 |
+| `gpu` | GPU 设备与进程 | `nvidia-smi` 结构化查询、`/proc/<pid>` | 32 卡 / 200 进程 |
+| `users` | 用户、sudo 三态、home 摘要 | `passwd`、`group`、`sudoers`、home 遍历 | 500 用户 / 2 万条目 / 2 秒 |
+| `mounts` | 挂载点 allowlist | `/proc/self/mounts`、`/dev/disk/by-uuid` | 40 |
+| `storage` | 有界目录树扫描 | `scandir` + `lstat`、`/proc/*/fd` | 1200 节点 / 深度 8 |
+
+探针参数按 shell 引号规则拼接，拒绝控制字符；`storage` 只接受挂载点清单中的精确路径。
+
+### 7.2 指标模型
+
+- 每次 `GET /metrics` 触发一次远端采样；服务端按主机保存环形缓冲（默认 1 小时、最多 2400 点）。
+- 曲线点同时携带远端 `collectedAt` 与本机 `receivedAt`；采样间隔按本机接收时间计算。
+- 累计计数差分在本地完成：计数器回绕、间隔 < 200 ms、缺少基线时返回 `reset` 与 `null` 速率，
+  绝不写成 0；回绕后下一采样重新建立基线。
+- CPU 百分比由 `/proc/stat` 增量计算（user/system/iowait/steal/idle），总利用率 = 100 - idle；
+  内存包含 buffers/cached/commit/swap 与 swap in/out 速率；磁盘按 512 字节扇区换算并计算
+  IOPS/await/util；网络按接口区分 `physical/bond/bridge/vlan/virtual/loopback`。
+- 最后成功采样超过 3 个采样间隔或最近一次采集失败时，响应 `stale=true`。
+
+### 7.3 GPU
+
+- 首选 `nvidia-smi --query-gpu` 的结构化字段（含 PCI、显存、利用率、温度、功耗、时钟、MIG、compute mode）；
+  扩展字段不受支持时自动回退到核心字段，缺失值保持 `null`。
+- 进程通过 `--query-compute-apps` 获取，并用 `/proc` 补齐 USER、命令行、可执行文件、工作目录与启动时间；
+  进程不可见或已退出时标记 `stale`，`processesStatus` 降级为 `partial`。
+- `capabilities.perProcessUtilization=false`：`nvidia-smi` 不提供进程级利用率，前端显示 `N/A`。
+- 不回传 `nvidia-smi` 原始文本。
+
+### 7.4 空间扫描
+
+```text
+POST /storage/scans
+  → 校验主机启用 / 挂载点 allowlist / 并发上限
+  → 写入 storage_scans（queued）并提交线程池
+  → running: 探针 lstat 遍历（one-file-system、符号链接策略、硬链接去重、deleted-open）
+  → 本地构建聚合树（硬链接不计重复、稀疏文件双口径、incomplete 传播、过滤与排序）
+  → 持久化结果 JSON（最多 3000 节点）+ 分块 SSE（200/块）+ done
+  → 审计、按主机保留最近 50 次扫描
+```
+
+- `storage_scans` 表由 Alembic `0002_storage_scans` 创建；应用启动时把 `queued/running` 标记为
+  `interrupted`，不自动重试。
+- 取消通过 `threading.Event` 传入传输层并终止本机 ssh 进程；排队中的扫描直接置为 `cancelled`。
+- 扫描路径只能来自 `GET /mounts` 的 allowlist；`children` 接口再次校验路径必须位于扫描挂载点内。
+- 权限错误、达到深度上限或节点上限都会使父目录 `incomplete=true`，并保留错误文本。
+
+### 7.5 用户与 sudo 三态
+
+- 只读取 `passwd`/`group`/`sudoers` 的派生结果；不读取 `/etc/shadow`，不回传原始规则内容。
+- `sudoGroupMember`（sudo/wheel 组成员）、`sudoPolicyPresent`（sudoers 可达时匹配）、
+  `sudoEffective`（仅对当前 SSH 用户执行 `sudo -n true`）互相独立；无法判定时保留 `null`/`unknown`。
+- home 摘要有界（深度 2、2 万条目、2 秒），超限标记 `truncated`，不可读标记 `incomplete`。
+- 全盘归属复用 C 阶段的扫描管线（`userFilter=uid`），不单独实现第二套遍历。
+
+### 7.6 前端结构
+
+- 主机详情页拆分为「概览 / 资源 / GPU / 磁盘空间 / 用户」五个页签，`?tab=` 深链接，仅激活页签拉取数据。
+- 资源/GPU 趋势每 2 秒轮询，页面隐藏或切走页签时停止；图表为纯 SVG（无第三方图表依赖）。
+- 空间扫描通过 SSE 接收进度与节点分块，完成后以 `GET /storage/scans/{id}` 的结果为准；
+  取消、失败、`interrupted` 均有明确状态。

@@ -411,3 +411,309 @@ data: {"type":"done","taskId":"...","status":"succeeded","progress":100,"exitCod
 | `/hosts/:id` | 主机详情 | snapshot、services、logs、`POST /api/tasks` |
 | `/tasks` | 维护任务 | `GET /api/tasks`、SSE、取消 |
 | `/hosts/:id/settings` | 主机设置 | `PATCH /api/servers/{id}`、secret、connection-test |
+
+## 8. 阶段三接口（资源观测）
+
+统一约定：
+
+- 分区对象形如 `{"status": "ok|permission_denied|unavailable|error", "error": null, "requiresSudo": false, "collectedAt": "..."}`；
+  分区不可用时 `data` 必须为 `null`，未知值不得写成 0。
+- 所有请求模型拒绝未知字段；路径参数先经过挂载点/home allowlist 校验。
+- 采集与扫描沿用输出上限、超时、取消与审计约定。
+
+### 8.1 `GET /api/servers/{serverId}/metrics?window=1m|5m|15m|1h`
+
+每次请求执行一次远端采样；服务端保留最近 1 小时环形数据（默认 2 秒采样），
+`points` 按窗口裁剪。`reset=true` 表示计数器回绕/间隔过短，该点速率为 `null`。
+
+```json
+{
+  "serverId": 1,
+  "collectedAt": "2026-10-30T12:00:00Z",
+  "windowSeconds": 300,
+  "retentionSeconds": 3600,
+  "sampleIntervalMs": 2000,
+  "stale": false,
+  "status": "ok",
+  "error": null,
+  "requiresSudo": false,
+  "current": {
+    "cpu": {
+      "status": "ok", "error": null, "requiresSudo": false, "collectedAt": "2026-10-30T12:00:00Z",
+      "data": {
+        "totalPercent": 12.5, "userPercent": 8.0, "systemPercent": 3.0,
+        "iowaitPercent": 1.0, "stealPercent": 0.0, "idlePercent": 87.5,
+        "logicalCpus": 32, "load1": 0.42, "load5": 0.55, "load15": 0.61
+      }
+    },
+    "memory": {
+      "status": "ok", "error": null, "requiresSudo": false, "collectedAt": "2026-10-30T12:00:00Z",
+      "data": {
+        "totalBytes": 68719476736, "availableBytes": 34359738368, "usedBytes": 34359738368,
+        "usedPercent": 50.0, "buffersBytes": 1073741824, "cachedBytes": 8589934592,
+        "commitBytes": 12884901888, "swapTotalBytes": 8589934592, "swapUsedBytes": 429496729,
+        "swapFreeBytes": 8160437862, "swapInPerSecond": null, "swapOutPerSecond": 0.0
+      }
+    },
+    "disk": {
+      "status": "ok", "error": null, "requiresSudo": false, "collectedAt": "...",
+      "data": {
+        "devices": [
+          {
+            "name": "nvme0n1", "kind": "disk", "parent": null, "model": "Samsung SSD 990 PRO",
+            "sizeBytes": 2000398934016, "hidden": false,
+            "readBytesPerSecond": 1048576.0, "writeBytesPerSecond": 2097152.0,
+            "readIops": 12.5, "writeIops": 8.0, "awaitMs": 0.42, "utilPercent": 12.3, "reset": false
+          }
+        ],
+        "mounts": [
+          {"mount": "/", "device": "/dev/nvme0n1p2", "filesystem": "ext4",
+           "deviceName": "nvme0n1p2", "readBytesPerSecond": null, "writeBytesPerSecond": null}
+        ]
+      }
+    },
+    "network": {
+      "status": "ok", "error": null, "requiresSudo": false, "collectedAt": "...",
+      "data": {
+        "defaultInterface": "eth0",
+        "interfaces": [
+          {"name": "eth0", "kind": "physical", "state": "up", "speedMbps": 10000,
+           "addresses": ["10.0.0.11/24"], "rxBytesPerSecond": 1024.0, "txBytesPerSecond": 2048.0,
+           "rxPacketsPerSecond": 12.0, "txPacketsPerSecond": 8.0,
+           "rxErrors": 0, "txErrors": 0, "rxDrops": 0, "txDrops": 0, "reset": false}
+        ]
+      }
+    },
+    "gpu": {
+      "status": "ok", "error": null, "requiresSudo": false, "collectedAt": "...",
+      "data": {"devices": [{"index": 0, "uuid": "GPU-…", "name": "NVIDIA GeForce RTX 4090",
+        "utilizationPercent": 37.0, "memoryUsedMb": 8192, "memoryTotalMb": 24564,
+        "encoderPercent": null, "decoderPercent": null, "temperatureC": 52.0, "powerDrawW": 210.5}]}
+    }
+  },
+  "points": [
+    {
+      "collectedAt": "2026-10-30T12:00:00Z", "receivedAt": "2026-10-30T12:00:00Z",
+      "sampleIntervalMs": 2000, "reset": false, "resetReason": null,
+      "cpuPercent": 12.5, "userPercent": 8.0, "systemPercent": 3.0, "iowaitPercent": 1.0,
+      "memoryUsedPercent": 50.0, "swapUsedPercent": 5.0,
+      "disk": {"nvme0n1": {"readBytesPerSecond": 1048576.0, "writeBytesPerSecond": 2097152.0,
+                            "readIops": 12.5, "writeIops": 8.0, "reset": false}},
+      "network": {"eth0": {"rxBytesPerSecond": 1024.0, "txBytesPerSecond": 2048.0,
+                            "rxPacketsPerSecond": 12.0, "txPacketsPerSecond": 8.0, "reset": false}},
+      "gpu": [{"index": 0, "utilizationPercent": 37.0, "memoryUsedMb": 8192,
+               "memoryTotalMb": 24564, "temperatureC": 52.0, "powerDrawW": 210.5}]
+    }
+  ],
+  "raw": {"cpu": {}, "memory": {}, "vmstat": {}, "disk": {}, "network": {}, "mounts": [], "gpu": {}}
+}
+```
+
+`collectedAt` 为远端采样时间，`receivedAt` 为本机接收时间；两者都返回便于识别时钟偏差。
+`stale=true` 表示最后一个成功采样已超过 3 个采样间隔（或最近一次采集失败）。
+
+### 8.2 `GET /api/servers/{serverId}/gpus?refresh=false`
+
+```json
+{
+  "serverId": 1,
+  "collectedAt": "2026-10-30T12:00:00Z",
+  "status": "ok",
+  "error": null,
+  "requiresSudo": false,
+  "capabilities": {"nvml": true, "processes": "ok", "mig": true, "perProcessUtilization": false},
+  "devices": [
+    {
+      "index": 0, "uuid": "GPU-…", "pciBusId": "0000:01:00.0", "name": "NVIDIA GeForce RTX 4090",
+      "driverVersion": "550.107.02", "memoryTotalMb": 24564, "memoryUsedMb": 8192,
+      "utilizationGpuPercent": 37.0, "utilizationMemoryPercent": 33.3,
+      "encoderPercent": null, "decoderPercent": null, "temperatureC": 52.0,
+      "powerDrawW": 210.5, "powerLimitW": 450.0, "clockGraphicsMhz": 2520,
+      "clockMemoryMhz": 10501, "migMode": "Disabled", "computeMode": "Default",
+      "migDevices": ["MIG 1g.5gb Device 0: (UUID: MIG-…)"]
+    }
+  ],
+  "processes": [
+    {"pid": 4242, "user": "labuser", "name": "python", "command": "python train.py --config a.yaml",
+     "memoryUsedMb": 8192, "utilizationPercent": null, "gpuUuid": "GPU-…", "gpuIndex": 0,
+     "programPath": "/usr/bin/python3.12", "cwd": "/home/labuser/work",
+     "startedAt": "2026-10-30T08:00:00Z", "stale": false, "error": null}
+  ],
+  "processesStatus": "ok",
+  "processesError": null,
+  "notes": []
+}
+```
+
+`processesStatus` 为 `ok` / `partial`（部分进程不可见或采样后退出）/ `unavailable`；
+`capabilities.perProcessUtilization=false` 时 `utilizationPercent` 必须为 `null`。
+不返回 `nvidia-smi` 原始文本。
+
+### 8.3 `GET /api/servers/{serverId}/users?includeSystem=false`
+
+```json
+{
+  "serverId": 1,
+  "collectedAt": "2026-10-30T12:00:00Z",
+  "includeSystem": false,
+  "status": "ok",
+  "error": null,
+  "requiresSudo": false,
+  "users": [
+    {
+      "login": "labuser", "uid": 1001, "gid": 1001, "primaryGroup": "labuser",
+      "supplementaryGroups": ["sudo", "docker"], "home": "/home/labuser",
+      "shell": "/bin/bash", "system": false, "recentLogin": null,
+      "sudo": {"groupMember": true, "policyPresent": true, "effective": "false",
+                "checkedAt": "2026-10-30T12:00:00Z", "error": null},
+      "homeStorage": {"allocatedBytes": 10737418240, "apparentBytes": 12884901888,
+                       "fileCount": 12000, "directoryCount": 900, "depth": 2,
+                       "truncated": false, "incomplete": false, "error": null,
+                       "collectedAt": "2026-10-30T12:00:00Z"}
+    }
+  ],
+  "notes": ["sudo 有效权限仅对当前 SSH 用户执行非交互验证，其他用户为 unknown"]
+}
+```
+
+`sudo.effective` 取值为 `true` / `false` / `unknown`，未知不得折算为 `false`；
+不读取 `/etc/shadow`，不回传原始 sudoers 内容。
+
+### 8.4 `GET /api/servers/{serverId}/mounts?refresh=false`
+
+```json
+{
+  "serverId": 1,
+  "collectedAt": "2026-10-30T12:00:00Z",
+  "status": "ok",
+  "error": null,
+  "requiresSudo": false,
+  "mounts": [
+    {"mount": "/", "device": "/dev/nvme0n1p2", "filesystem": "ext4",
+     "options": "rw,relatime", "uuid": "0f8fad5b-…", "majorMinor": "259:2",
+     "physicalDevice": "nvme0n1p2", "readOnly": false}
+  ]
+}
+```
+
+### 8.5 空间扫描
+
+`POST /api/servers/{serverId}/storage/scans`：
+
+```json
+{
+  "mount": "/data",
+  "oneFileSystem": true,
+  "followSymlinks": false,
+  "maxDepth": 3,
+  "userFilter": null,
+  "minFileSize": 0,
+  "extension": ".log",
+  "modifiedAfter": "2026-10-01T00:00:00Z",
+  "includeDeletedOpen": true
+}
+```
+
+- `mount` 必须与 `GET /mounts` 中的挂载点完全一致，否则 `422 mount_not_allowed`（fail closed）。
+- 同一主机同时只允许 1 个排队/运行中的扫描，冲突返回 `409 scan_limit_reached`。
+- 响应 `201`，返回扫描对象（`status=queued`）。
+
+`POST /api/servers/{serverId}/users/storage-scan`：
+
+```json
+{"uid": 1001, "mount": "/", "maxDepth": 8, "minFileSize": 0, "includeDeletedOpen": true}
+```
+
+要求 UID 属于 `GET /users?includeSystem=true`，否则 `404 user_not_found`。
+
+扫描对象：
+
+```json
+{
+  "scanId": "6f1c…",
+  "serverId": 1,
+  "serverAlias": "lab-gpu-01",
+  "mount": "/data",
+  "mountInfo": {"device": "/dev/nvme1n1", "mount": "/data", "filesystem": "ext4"},
+  "status": "succeeded",
+  "stage": "done",
+  "progress": 100,
+  "oneFileSystem": true,
+  "followSymlinks": false,
+  "maxDepth": 3,
+  "userFilter": null,
+  "minFileSize": 0,
+  "extension": ".log",
+  "nodeCount": 812,
+  "truncated": false,
+  "incomplete": false,
+  "crossDeviceCount": 0,
+  "deletedOpenBytes": 0,
+  "deletedOpenCount": 0,
+  "nodes": [
+    {
+      "id": "5f2a…", "path": "/data", "parentPath": null, "name": "data", "kind": "dir",
+      "allocatedBytes": 10737418240, "apparentBytes": 12884901888,
+      "fileCount": 1200, "directoryCount": 80, "uid": 0, "gid": 0, "inode": 256,
+      "hardlinkDuplicateOf": null, "deletedOpen": false,
+      "unscanned": false, "incomplete": false, "error": null,
+      "modifiedAt": "2026-10-30T08:00:00Z"
+    }
+  ],
+  "largestFiles": [],
+  "summaryByUid": [
+    {"uid": 1001, "allocatedBytes": 10737418240, "apparentBytes": 12884901888,
+     "fileCount": 1200, "directoryCount": 80, "incomplete": false}
+  ],
+  "error": null,
+  "createdAt": "...", "startedAt": "...", "finishedAt": "..."
+}
+```
+
+`status` 取值 `queued` / `running` / `succeeded` / `failed` / `cancelled` / `interrupted`。
+应用重启时未完成的扫描标记为 `interrupted`。
+`allocatedBytes` 为 `st_blocks*512`，`apparentBytes` 为 `st_size`；硬链接按 inode 去重并标记
+`hardlinkDuplicateOf`；目录聚合值包含全部已扫描后代，`unscanned=true` 或权限错误会使
+`incomplete=true`。
+
+查询与操作：
+
+- `GET /api/storage/scans/{scanId}`：返回扫描对象（含已完成的结果）。
+- `GET /api/storage/scans/{scanId}/children?path=/data/logs`：从已完成结果中取直接子节点，
+  路径必须在扫描挂载点内（否则 `422 path_not_allowed`），不存在返回 `404 scan_path_not_found`。
+- `POST /api/storage/scans/{scanId}/cancel`：排队中直接取消；运行中终止远端扫描。
+  已结束返回 `409 scan_finished`。
+- `GET /api/storage/scans/{scanId}/events`：SSE。
+
+SSE 事件：
+
+```
+event: progress
+data: {"type":"progress","scanId":"…","status":"running","stage":"scanning","progress":35,"at":"…"}
+
+event: nodes
+data: {"type":"nodes","scanId":"…","offset":0,"chunk":[{"id":"…","path":"/data",…}]}
+
+event: done
+data: {"type":"done","scanId":"…","status":"succeeded","progress":100,"error":null,
+       "nodeCount":812,"truncated":false,"incomplete":false,"summary":[…],"at":"…"}
+```
+
+节点分块大小 200；扫描结果最多保留 3000 个节点（超出时 `truncated=true`）。
+
+### 8.6 阶段三错误码
+
+| HTTP | code | 说明 |
+| --- | --- | --- |
+| 400 | `server_disabled` | 主机已停用，不能创建扫描 |
+| 404 | `storage_scan_not_found` | 扫描不存在 |
+| 404 | `scan_path_not_found` | 扫描结果中不存在该路径 |
+| 404 | `user_not_found` | 可登录用户不存在或不可见 |
+| 409 | `scan_limit_reached` | 该主机已有进行中的扫描 |
+| 409 | `scan_finished` | 扫描已结束，无法取消 |
+| 409 | `scan_not_finished` | 扫描未完成，无法浏览子目录 |
+| 422 | `mount_not_allowed` | 挂载点不在 allowlist 内 |
+| 422 | `path_not_allowed` | 路径越界或含非法路径段 |
+| 502 | `mounts_unavailable` | 无法读取挂载点清单（fail closed） |
+| 502 | `users_unavailable` | 无法读取用户清单 |
+| 503 | `observability_unavailable` | 服务关闭中 |

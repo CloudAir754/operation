@@ -1,10 +1,11 @@
 # LabOpsPanel
 
-Windows 本机运行、通过 SSH 管理 Linux 主机的 Web 控制台。浏览器打开本地页面即可查看多台服务器状态、读取日志、启停 systemd 服务，无需在远端安装常驻 Agent。
+Windows 本机运行、通过 SSH 管理 Linux 主机的 Web 控制台。浏览器打开本地页面即可查看多台服务器状态、读取日志、启停 systemd 服务，并查看资源趋势、GPU 进程、磁盘空间树与用户空间归属，无需在远端安装常驻 Agent。
 
 - 后端：Python 3.12 + FastAPI + SQLAlchemy + Alembic + SQLite，SSH 复用 Windows OpenSSH 客户端。
-- 前端：React + TypeScript + Vite，REST 拉取快照、SSE 订阅长任务进度。
+- 前端：React + TypeScript + Vite，REST 拉取快照与指标、SSE 订阅长任务与空间扫描进度。
 - 凭据：每台主机的 sudo 密码使用 Windows DPAPI 加密后存库，明文只存在于内存与本机用户的 DPAPI 解密结果中。
+- 观测：一次性 Python 探针采集 `/proc`/sysfs/`nvidia-smi` 结构化数据；指标在内存保留 1 小时，扫描结果落库。
 
 ## 快速开始
 
@@ -46,6 +47,16 @@ cd frontend; npm run dev
 | --- | --- |
 | ![维护任务](docs/screenshots/03-tasks.png) | ![主机设置](docs/screenshots/04-settings.png) |
 
+主机详情提供「概览 / 资源 / GPU / 磁盘空间 / 用户」五个页签：
+
+| 资源趋势 | GPU 监控 |
+| --- | --- |
+| ![资源趋势](docs/screenshots/06-metrics.png) | ![GPU 监控](docs/screenshots/07-gpu.png) |
+
+| 磁盘空间 | 用户与 sudo |
+| --- | --- |
+| ![磁盘空间](docs/screenshots/08-storage.png) | ![用户与 sudo](docs/screenshots/09-users.png) |
+
 采集失败时按分区展示原因，GPU 缺失显示 `N/A`（见 [错误态截图](docs/screenshots/05-host-detail-error.png)）。
 
 ## 常用命令
@@ -77,6 +88,14 @@ cd frontend; npm run dev
 | `LABOPS_MAX_OUTPUT_BYTES` | `262144` | 单流输出上限 |
 | `LABOPS_ALLOW_ARBITRARY_COMMANDS` | `false` | 是否开启任意命令入口（仍经语法检查与确认） |
 | `LABOPS_MAX_CONCURRENT_TASKS` | `3` | 后台任务并发数 |
+| `LABOPS_METRICS_RETENTION_SECONDS` | `3600` | 指标内存环形缓存保留时长 |
+| `LABOPS_METRICS_MAX_POINTS` | `2400` | 每台主机的最大指标点数 |
+| `LABOPS_GPU_CACHE_TTL_SECONDS` | `5` | GPU 采集缓存有效期 |
+| `LABOPS_USERS_CACHE_TTL_SECONDS` | `30` | 用户列表缓存有效期 |
+| `LABOPS_MOUNTS_CACHE_TTL_SECONDS` | `20` | 挂载点清单缓存有效期 |
+| `LABOPS_SCAN_TIMEOUT_SECONDS` | `180` | 空间扫描超时 |
+| `LABOPS_SCAN_MAX_ACTIVE_PER_SERVER` | `1` | 每台主机并发扫描上限 |
+| `LABOPS_SCAN_HISTORY_LIMIT` | `50` | 每台主机保留的扫描历史条数 |
 | `LABOPS_SECRET_BACKEND` | 空 | 设为 `disabled` 可禁用 DPAPI（仅用于排障） |
 
 ## 安全边界
@@ -109,5 +128,7 @@ docs/requirements/      需求、架构、验收与 API 契约
 - 只导入 OpenSSH 配置中的显式 `Host`；通配 `Host` 块仅作为默认值来源，`Match` 块不参与解析。
 - 首版为单管理员、免登录模式，只允许绑定回环地址。
 - 任意命令入口默认关闭；开启前请先确认目标主机与影响范围。
-- 首版不包含多用户、批量变更、磁盘格式化、GPU 进程视图与 SSH 公钥管理。
-- 本目录尚未初始化 Git 仓库；如需版本管理，可执行 `git init` 后再提交。
+- GPU 仅支持 NVIDIA（`nvidia-smi`）；无驱动时返回 `unavailable`，不会伪造数据；AMD/Intel 适配器未实现。
+- 指标历史只保存在内存中，应用重启后清空；空间扫描进度为阶段式（连接/扫描/聚合/分块），不是逐目录实时进度。
+- 磁盘空间扫描不读取文件内容，只统计元数据；权限不足或达到深度/节点上限时标记 `incomplete`/`truncated`。
+- 首版不包含多用户、批量变更、磁盘格式化与 SSH 公钥管理。

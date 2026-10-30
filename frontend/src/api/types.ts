@@ -205,6 +205,443 @@ export interface Snapshot {
   data: SnapshotSections;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Stage 3 — resource observability                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Section envelope used by every stage-3 probe. When `status !== "ok"` the
+ * backend forces `data` to `null`; a missing value must render as "N/A" and
+ * never as zero.
+ */
+export interface ObservableSection<T> {
+  status: SectionStatus;
+  error: string | null;
+  requiresSudo: boolean;
+  collectedAt: IsoDateTime | null;
+  data: T | null;
+}
+
+export interface CpuMetricData {
+  totalPercent: number | null;
+  userPercent: number | null;
+  systemPercent: number | null;
+  iowaitPercent: number | null;
+  stealPercent: number | null;
+  idlePercent: number | null;
+  logicalCpus: number | null;
+  load1: number | null;
+  load5: number | null;
+  load15: number | null;
+}
+
+export interface MemoryMetricData {
+  totalBytes: number | null;
+  availableBytes: number | null;
+  usedBytes: number | null;
+  usedPercent: number | null;
+  buffersBytes: number | null;
+  cachedBytes: number | null;
+  commitBytes: number | null;
+  swapTotalBytes: number | null;
+  swapUsedBytes: number | null;
+  swapFreeBytes: number | null;
+  swapInPerSecond: number | null;
+  swapOutPerSecond: number | null;
+}
+
+export interface DiskDeviceMetric {
+  name: string;
+  kind: string | null;
+  parent: string | null;
+  model: string | null;
+  sizeBytes: number | null;
+  hidden: boolean;
+  readBytesPerSecond: number | null;
+  writeBytesPerSecond: number | null;
+  readIops: number | null;
+  writeIops: number | null;
+  awaitMs: number | null;
+  utilPercent: number | null;
+  reset: boolean;
+}
+
+export interface DiskMountMetric {
+  mount: string;
+  device: string | null;
+  filesystem: string | null;
+  deviceName: string | null;
+  readBytesPerSecond: number | null;
+  writeBytesPerSecond: number | null;
+}
+
+export interface DiskMetricData {
+  devices: DiskDeviceMetric[];
+  mounts: DiskMountMetric[];
+}
+
+export interface NetworkInterfaceMetric {
+  name: string;
+  kind: string | null;
+  state: string | null;
+  speedMbps: number | null;
+  addresses: string[];
+  rxBytesPerSecond: number | null;
+  txBytesPerSecond: number | null;
+  rxPacketsPerSecond: number | null;
+  txPacketsPerSecond: number | null;
+  rxErrors: number | null;
+  txErrors: number | null;
+  rxDrops: number | null;
+  txDrops: number | null;
+  reset: boolean;
+}
+
+export interface NetworkMetricData {
+  defaultInterface: string | null;
+  interfaces: NetworkInterfaceMetric[];
+}
+
+export interface GpuSampleMetric {
+  index: number;
+  uuid: string | null;
+  name: string | null;
+  utilizationPercent: number | null;
+  memoryUsedMb: number | null;
+  memoryTotalMb: number | null;
+  encoderPercent: number | null;
+  decoderPercent: number | null;
+  temperatureC: number | null;
+  powerDrawW: number | null;
+}
+
+export interface GpuMetricData {
+  devices: GpuSampleMetric[];
+}
+
+export interface MetricsCurrent {
+  cpu: ObservableSection<CpuMetricData>;
+  memory: ObservableSection<MemoryMetricData>;
+  disk: ObservableSection<DiskMetricData>;
+  network: ObservableSection<NetworkMetricData>;
+  gpu: ObservableSection<GpuMetricData>;
+}
+
+export interface DiskRateSample {
+  readBytesPerSecond: number | null;
+  writeBytesPerSecond: number | null;
+  readIops: number | null;
+  writeIops: number | null;
+  reset: boolean;
+}
+
+export interface NetworkRateSample {
+  rxBytesPerSecond: number | null;
+  txBytesPerSecond: number | null;
+  rxPacketsPerSecond: number | null;
+  txPacketsPerSecond: number | null;
+  reset: boolean;
+}
+
+/** One point of the in-memory ring buffer. Rates are null on `reset`. */
+export interface MetricPoint {
+  collectedAt: IsoDateTime;
+  receivedAt: IsoDateTime;
+  sampleIntervalMs: number;
+  reset: boolean;
+  resetReason: string | null;
+  cpuPercent: number | null;
+  userPercent: number | null;
+  systemPercent: number | null;
+  iowaitPercent: number | null;
+  memoryUsedPercent: number | null;
+  swapUsedPercent: number | null;
+  disk: Record<string, DiskRateSample>;
+  network: Record<string, NetworkRateSample>;
+  gpu: GpuSampleMetric[];
+}
+
+export type MetricsWindow = "1m" | "5m" | "15m" | "1h";
+
+export interface Metrics {
+  serverId: number;
+  collectedAt: IsoDateTime;
+  windowSeconds: number;
+  retentionSeconds: number;
+  sampleIntervalMs: number;
+  stale: boolean;
+  status: SectionStatus;
+  error: string | null;
+  requiresSudo: boolean;
+  current: MetricsCurrent;
+  points: MetricPoint[];
+  raw: Record<string, unknown> | null;
+}
+
+/* -------------------------------- GPU ------------------------------------- */
+
+export type GpuProcessesStatus = "ok" | "partial" | "unavailable";
+
+export interface GpuCapabilities {
+  nvml: boolean;
+  processes: GpuProcessesStatus;
+  mig: boolean;
+  perProcessUtilization: boolean;
+}
+
+export interface GpuDeviceDetail {
+  index: number;
+  uuid: string | null;
+  pciBusId: string | null;
+  name: string | null;
+  driverVersion: string | null;
+  memoryTotalMb: number | null;
+  memoryUsedMb: number | null;
+  utilizationGpuPercent: number | null;
+  utilizationMemoryPercent: number | null;
+  encoderPercent: number | null;
+  decoderPercent: number | null;
+  temperatureC: number | null;
+  powerDrawW: number | null;
+  powerLimitW: number | null;
+  clockGraphicsMhz: number | null;
+  clockMemoryMhz: number | null;
+  migMode: string | null;
+  computeMode: string | null;
+  migDevices: string[];
+}
+
+export interface GpuProcess {
+  pid: number;
+  user: string | null;
+  name: string | null;
+  command: string | null;
+  memoryUsedMb: number | null;
+  utilizationPercent: number | null;
+  gpuUuid: string | null;
+  gpuIndex: number | null;
+  programPath: string | null;
+  cwd: string | null;
+  startedAt: IsoDateTime | null;
+  stale: boolean;
+  error: string | null;
+}
+
+export interface GpuMonitor {
+  serverId: number;
+  collectedAt: IsoDateTime;
+  status: SectionStatus;
+  error: string | null;
+  requiresSudo: boolean;
+  capabilities: GpuCapabilities;
+  devices: GpuDeviceDetail[];
+  processes: GpuProcess[];
+  processesStatus: GpuProcessesStatus;
+  processesError: string | null;
+  notes: string[];
+}
+
+/* -------------------------------- Users ----------------------------------- */
+
+export type SudoEffective = "true" | "false" | "unknown";
+
+export interface SudoState {
+  groupMember: boolean | null;
+  policyPresent: boolean | null;
+  effective: SudoEffective;
+  checkedAt: IsoDateTime | null;
+  error: string | null;
+}
+
+export interface HomeStorage {
+  allocatedBytes: number | null;
+  apparentBytes: number | null;
+  fileCount: number | null;
+  directoryCount: number | null;
+  depth: number | null;
+  truncated: boolean;
+  incomplete: boolean;
+  error: string | null;
+  collectedAt: IsoDateTime | null;
+}
+
+export interface UserInfo {
+  login: string;
+  uid: number;
+  gid: number;
+  primaryGroup: string | null;
+  supplementaryGroups: string[];
+  home: string;
+  shell: string;
+  system: boolean;
+  recentLogin: string | null;
+  sudo: SudoState;
+  homeStorage: HomeStorage | null;
+}
+
+export interface UsersResponse {
+  serverId: number;
+  collectedAt: IsoDateTime;
+  includeSystem: boolean;
+  status: SectionStatus;
+  error: string | null;
+  requiresSudo: boolean;
+  users: UserInfo[];
+  notes: string[];
+}
+
+/* -------------------------------- Mounts ---------------------------------- */
+
+export interface MountInfo {
+  mount: string;
+  device: string | null;
+  filesystem: string | null;
+  options: string | null;
+  uuid: string | null;
+  majorMinor: string | null;
+  physicalDevice: string | null;
+  readOnly: boolean;
+}
+
+export interface MountsResponse {
+  serverId: number;
+  collectedAt: IsoDateTime;
+  status: SectionStatus;
+  error: string | null;
+  requiresSudo: boolean;
+  mounts: MountInfo[];
+}
+
+/* ----------------------------- Storage scans ------------------------------ */
+
+export type ScanStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
+
+export type StorageNodeKind = "dir" | "file" | "symlink" | "other";
+
+export interface StorageNode {
+  id: string;
+  path: string;
+  parentPath: string | null;
+  name: string;
+  kind: StorageNodeKind;
+  allocatedBytes: number | null;
+  apparentBytes: number | null;
+  fileCount: number | null;
+  directoryCount: number | null;
+  uid: number | null;
+  gid: number | null;
+  inode: number | null;
+  hardlinkDuplicateOf: string | null;
+  deletedOpen: boolean;
+  unscanned: boolean;
+  incomplete: boolean;
+  error: string | null;
+  modifiedAt: IsoDateTime | null;
+  /** Present when the backend inlines one level of children. */
+  children?: StorageNode[];
+}
+
+export interface StorageUidSummary {
+  uid: number;
+  allocatedBytes: number;
+  apparentBytes: number;
+  fileCount: number;
+  directoryCount: number;
+  incomplete: boolean;
+}
+
+export interface StorageScan {
+  scanId: string;
+  serverId: number;
+  serverAlias: string;
+  mount: string;
+  mountInfo: Record<string, string | null> | null;
+  status: ScanStatus;
+  stage: string;
+  progress: number;
+  oneFileSystem: boolean;
+  followSymlinks: boolean;
+  maxDepth: number;
+  userFilter: number | null;
+  minFileSize: number;
+  extension: string | null;
+  nodeCount: number;
+  truncated: boolean;
+  incomplete: boolean;
+  crossDeviceCount: number;
+  deletedOpenBytes: number;
+  deletedOpenCount: number;
+  nodes: StorageNode[];
+  largestFiles: StorageNode[];
+  summaryByUid: StorageUidSummary[];
+  error: string | null;
+  createdAt: IsoDateTime;
+  startedAt: IsoDateTime | null;
+  finishedAt: IsoDateTime | null;
+}
+
+export interface StorageScanList {
+  scans: StorageScan[];
+  count: number;
+}
+
+export interface StorageScanRequest {
+  mount: string;
+  oneFileSystem: boolean;
+  followSymlinks: boolean;
+  maxDepth: number;
+  minFileSize: number;
+  extension: string | null;
+  modifiedAfter: string | null;
+  includeDeletedOpen: boolean;
+}
+
+export interface UserStorageScanRequest {
+  uid: number;
+  mount: string;
+  maxDepth: number;
+  minFileSize: number;
+  includeDeletedOpen: boolean;
+}
+
+export interface ScanProgressEvent {
+  type: "progress";
+  scanId: string;
+  status: ScanStatus;
+  stage: string;
+  progress: number;
+  at?: IsoDateTime;
+}
+
+export interface ScanNodesEvent {
+  type: "nodes";
+  scanId: string;
+  offset: number;
+  chunk: StorageNode[];
+  at?: IsoDateTime;
+}
+
+export interface ScanDoneEvent {
+  type: "done";
+  scanId: string;
+  status: ScanStatus;
+  progress: number;
+  error: string | null;
+  nodeCount: number;
+  truncated: boolean;
+  incomplete: boolean;
+  summary?: StorageUidSummary[];
+  at?: IsoDateTime;
+}
+
+export type ScanEvent = ScanProgressEvent | ScanNodesEvent | ScanDoneEvent;
+
 export interface ServicesResponse {
   serverId: number;
   collectedAt: IsoDateTime;

@@ -5,12 +5,16 @@ import type {
   CancelTaskResponse,
   ConnectionTestResult,
   CreateTaskRequest,
+  GpuMonitor,
   Health,
   Host,
   ImportRequest,
   ImportResult,
   ListTasksQuery,
   LogsResponse,
+  Metrics,
+  MetricsWindow,
+  MountsResponse,
   SecretStatus,
   ServerList,
   ServicesResponse,
@@ -18,9 +22,15 @@ import type {
   SetSecretRequest,
   Snapshot,
   SshConfig,
+  StorageNode,
+  StorageScan,
+  StorageScanList,
+  StorageScanRequest,
   Task,
   TaskList,
   UpdateServerRequest,
+  UsersResponse,
+  UserStorageScanRequest,
 } from "./types";
 
 export const API_BASE_PATH = "/api";
@@ -218,6 +228,112 @@ export function getSnapshot(
     `/servers/${encodeURIComponent(String(serverId))}/snapshot${query}`,
     { signal: options.signal },
   );
+}
+
+/**
+ * One remote sample per call. `window` only trims the returned ring buffer, so
+ * switching it must re-request immediately.
+ */
+export function getMetrics(
+  serverId: number,
+  options: { window?: MetricsWindow; signal?: AbortSignal } = {},
+): Promise<Metrics> {
+  const window = options.window ?? "5m";
+  return request<Metrics>(
+    `/servers/${encodeURIComponent(String(serverId))}/metrics?window=${window}`,
+    { signal: options.signal },
+  );
+}
+
+export function getGpus(
+  serverId: number,
+  options: { refresh?: boolean; signal?: AbortSignal } = {},
+): Promise<GpuMonitor> {
+  const query = options.refresh ? "?refresh=true" : "";
+  return request<GpuMonitor>(`/servers/${encodeURIComponent(String(serverId))}/gpus${query}`, {
+    signal: options.signal,
+  });
+}
+
+export function getUsers(
+  serverId: number,
+  options: { includeSystem?: boolean; signal?: AbortSignal } = {},
+): Promise<UsersResponse> {
+  const includeSystem = options.includeSystem ?? false;
+  return request<UsersResponse>(
+    `/servers/${encodeURIComponent(String(serverId))}/users?includeSystem=${includeSystem}`,
+    { signal: options.signal },
+  );
+}
+
+export function getMounts(
+  serverId: number,
+  options: { refresh?: boolean; signal?: AbortSignal } = {},
+): Promise<MountsResponse> {
+  const query = options.refresh ? "?refresh=true" : "";
+  return request<MountsResponse>(`/servers/${encodeURIComponent(String(serverId))}/mounts${query}`, {
+    signal: options.signal,
+  });
+}
+
+export function listStorageScans(
+  serverId: number,
+  signal?: AbortSignal,
+): Promise<StorageScanList> {
+  return request<StorageScanList>(
+    `/servers/${encodeURIComponent(String(serverId))}/storage/scans`,
+    { signal },
+  );
+}
+
+export function createStorageScan(
+  serverId: number,
+  payload: StorageScanRequest,
+  signal?: AbortSignal,
+): Promise<StorageScan> {
+  return request<StorageScan>(`/servers/${encodeURIComponent(String(serverId))}/storage/scans`, {
+    method: "POST",
+    body: payload,
+    signal,
+  });
+}
+
+/** Per-UID full-disk scan started from the 用户 tab. */
+export function createUserStorageScan(
+  serverId: number,
+  payload: UserStorageScanRequest,
+  signal?: AbortSignal,
+): Promise<StorageScan> {
+  return request<StorageScan>(
+    `/servers/${encodeURIComponent(String(serverId))}/users/storage-scan`,
+    { method: "POST", body: payload, signal },
+  );
+}
+
+export function getStorageScan(scanId: string, signal?: AbortSignal): Promise<StorageScan> {
+  return request<StorageScan>(`/storage/scans/${encodeURIComponent(scanId)}`, { signal });
+}
+
+export function cancelStorageScan(scanId: string): Promise<StorageScan> {
+  return request<StorageScan>(`/storage/scans/${encodeURIComponent(scanId)}/cancel`, {
+    method: "POST",
+  });
+}
+
+export function getStorageScanChildren(
+  scanId: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<StorageNode[]> {
+  const params = new URLSearchParams({ path });
+  return request<StorageNode[]>(
+    `/storage/scans/${encodeURIComponent(scanId)}/children?${params.toString()}`,
+    { signal },
+  );
+}
+
+export function storageScanEventsUrl(scanId: string): string {
+  return `${API_BASE_PATH}/storage/scans/${encodeURIComponent(scanId)}/events`;
 }
 
 export function getServices(

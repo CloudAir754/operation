@@ -1,6 +1,6 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { createTask, getHost, getSnapshot } from "../api/client";
 import { describeError } from "../api/errors";
 import type {
@@ -11,8 +11,16 @@ import type {
   ServicesInfo,
   Snapshot,
   SnapshotSection,
+  StorageScan,
   TaskParams,
 } from "../api/types";
+import { HostTabList, isHostTabId } from "../components/host/HostTabs";
+import type { HostTabId } from "../components/host/HostTabs";
+import { GpuTab } from "../components/host/GpuTab";
+import { MetricsTab } from "../components/host/MetricsTab";
+import { SECTION_STATUS_DESCRIPTIONS, SectionNotice } from "../components/host/SectionNotice";
+import { StorageTab } from "../components/host/StorageTab";
+import { UsersTab } from "../components/host/UsersTab";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { LogPanel } from "../components/LogPanel";
 import {
@@ -68,13 +76,6 @@ interface TaskNotice {
   alias: string;
 }
 
-const SECTION_STATUS_DESCRIPTIONS: Record<SectionStatus, string> = {
-  ok: "采集成功，但主机没有返回该部分数据。",
-  permission_denied: "当前 SSH 用户没有读取该信息的权限。",
-  unavailable: "该主机不支持这项信息采集。",
-  error: "采集该部分信息时发生错误。",
-};
-
 const SERVICE_ACTION_LABELS: Record<ServiceAction, string> = {
   service_start: "启动",
   service_stop: "停止",
@@ -95,6 +96,18 @@ export function HostDetailPage() {
   const params = useParams<{ id: string }>();
   const serverId = Number(params.id);
   const validServerId = Number.isInteger(serverId) && serverId > 0;
+
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const activeTab: HostTabId = isHostTabId(tabParam) ? tabParam : "overview";
+  const setTab = useCallback(
+    (next: HostTabId) => {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.set("tab", next);
+      setSearchParams(nextParams, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
 
   const loadHost = useCallback(
     (signal: AbortSignal) => getHost(serverId, signal),
@@ -135,6 +148,9 @@ export function HostDetailPage() {
   const [logTarget, setLogTarget] = useState<{ unit: string | null } | null>(null);
   const [exportPending, setExportPending] = useState<string | null>(null);
 
+  // A per-UID scan created from the 用户 tab is handed to the 磁盘空间 tab.
+  const [adoptedScanId, setAdoptedScanId] = useState<string | null>(null);
+
   // Never render data belonging to a previously selected host while the new
   // request is in flight.
   const host = loadedHost && loadedHost.id === serverId ? loadedHost : null;
@@ -143,6 +159,14 @@ export function HostDetailPage() {
 
   const hostAlias = host?.alias ?? `主机 #${serverId}`;
   usePageTitle(host ? `主机 ${host.alias}` : "主机详情");
+
+  const mountSizes = useMemo(() => {
+    const sizes: Record<string, number> = {};
+    for (const mount of snapshot?.data.disks.data?.mounts ?? []) {
+      sizes[mount.mount] = mount.totalBytes;
+    }
+    return sizes;
+  }, [snapshot]);
 
   const handleRefresh = () => {
     if (!validServerId) return;
@@ -223,6 +247,11 @@ export function HostDetailPage() {
     } finally {
       setExportPending(null);
     }
+  };
+
+  const handleUserScanStarted = (scan: StorageScan) => {
+    setAdoptedScanId(scan.scanId);
+    setTab("storage");
   };
 
   if (!validServerId) {
@@ -315,298 +344,325 @@ export function HostDetailPage() {
         </SuccessBanner>
       ) : null}
 
-      {snapshotError ? (
-        <ErrorBanner
-          title="无法获取主机快照"
-          message={snapshotError.message}
-          onRetry={handleRefresh}
-        />
-      ) : null}
+      <HostTabList active={activeTab} onChange={setTab} />
 
-      {snapshotLoading && !snapshot ? (
-        <LoadingBlock label="正在采集主机状态…" />
-      ) : !snapshot && !snapshotError ? (
-        <LoadingBlock label="正在读取主机快照…" />
-      ) : snapshot ? (
-        <>
-          <div className="snapshot-meta" aria-live="polite">
-            <span>
-              采集于{" "}
-              <span title={formatDateTime(snapshot.collectedAt)}>
-                {formatRelativeTime(snapshot.collectedAt)}
-              </span>
-            </span>
-            <span className="muted">{formatDateTime(snapshot.collectedAt)}</span>
-            <span className="muted">数据年龄 {formatDuration(snapshot.ageSeconds)}</span>
-            {snapshot.stale ? <StatusBadge tone="warning">非实时缓存</StatusBadge> : null}
-            {snapshot.status !== "ok" ? (
-              <StatusBadge tone={SECTION_STATUS_TONES[snapshot.status]}>
-                {SECTION_STATUS_LABELS[snapshot.status]}
-              </StatusBadge>
+      <div
+        role="tabpanel"
+        id={`host-panel-${activeTab}`}
+        aria-labelledby={`host-tab-${activeTab}`}
+        tabIndex={0}
+        className="tabpanel"
+      >
+        {activeTab === "overview" ? (
+          <>
+            {snapshotError ? (
+              <ErrorBanner
+                title="无法获取主机快照"
+                message={snapshotError.message}
+                onRetry={handleRefresh}
+              />
             ) : null}
-          </div>
 
-          {snapshot.status !== "ok" && snapshot.error ? (
-            <InfoBanner tone="warning">
-              整体采集状态异常：{snapshot.error}
-              {snapshot.stale ? "（当前展示的是非实时缓存）" : ""}
-            </InfoBanner>
-          ) : null}
-
-          <div className="detail-grid">
-            <SnapshotSectionView
-              title="系统信息"
-              testId="system-section"
-              section={sections?.system}
-            >
-              {(data) => (
-                <DetailList
-                  items={[
-                    { label: "主机名", value: data.hostname },
-                    { label: "操作系统", value: data.os },
-                    { label: "内核", value: data.kernel },
-                    { label: "架构", value: data.arch },
-                    { label: "运行时长", value: formatDuration(data.uptimeSeconds) },
-                    { label: "启动时间", value: formatDateTime(data.bootTime) },
-                  ]}
-                />
-              )}
-            </SnapshotSectionView>
-
-            <SnapshotSectionView title="CPU" testId="cpu-section" section={sections?.cpu}>
-              {(data) => (
-                <div className="stack-sm">
-                  <UsageBar
-                    label="CPU 使用率"
-                    percent={data.usagePercent}
-                    testId="cpu-usage"
-                  />
-                  <DetailList
-                    items={[
-                      { label: "型号", value: data.model },
-                      { label: "核心数", value: data.cores },
-                      { label: "1 分钟负载", value: data.load1 ?? "—" },
-                      { label: "5 分钟负载", value: data.load5 ?? "—" },
-                      { label: "15 分钟负载", value: data.load15 ?? "—" },
-                    ]}
-                  />
+            {snapshotLoading && !snapshot ? (
+              <LoadingBlock label="正在采集主机状态…" />
+            ) : !snapshot && !snapshotError ? (
+              <LoadingBlock label="正在读取主机快照…" />
+            ) : snapshot ? (
+              <div className="stack">
+                <div className="snapshot-meta" aria-live="polite">
+                  <span>
+                    采集于{" "}
+                    <span title={formatDateTime(snapshot.collectedAt)}>
+                      {formatRelativeTime(snapshot.collectedAt)}
+                    </span>
+                  </span>
+                  <span className="muted">{formatDateTime(snapshot.collectedAt)}</span>
+                  <span className="muted">数据年龄 {formatDuration(snapshot.ageSeconds)}</span>
+                  {snapshot.stale ? <StatusBadge tone="warning">非实时缓存</StatusBadge> : null}
+                  {snapshot.status !== "ok" ? (
+                    <StatusBadge tone={SECTION_STATUS_TONES[snapshot.status]}>
+                      {SECTION_STATUS_LABELS[snapshot.status]}
+                    </StatusBadge>
+                  ) : null}
                 </div>
-              )}
-            </SnapshotSectionView>
 
-            <SnapshotSectionView
-              title="内存"
-              testId="memory-section"
-              section={sections?.memory}
-            >
-              {(data) => (
-                <div className="stack-sm">
-                  <UsageBar
-                    label="内存使用率"
-                    percent={data.usedPercent}
-                    testId="memory-usage"
-                  />
-                  <DetailList
-                    items={[
-                      {
-                        label: "已用",
-                        value: formatBytes(
-                          Math.max(0, data.totalBytes - data.availableBytes),
-                        ),
-                      },
-                      { label: "总内存", value: formatBytes(data.totalBytes) },
-                      { label: "可用", value: formatBytes(data.availableBytes) },
-                      {
-                        label: "Swap",
-                        value:
-                          data.swapTotalBytes > 0
-                            ? `${formatBytes(data.swapUsedBytes)} / ${formatBytes(
-                                data.swapTotalBytes,
-                              )}`
-                            : "未启用",
-                      },
-                    ]}
-                  />
+                {snapshot.status !== "ok" && snapshot.error ? (
+                  <InfoBanner tone="warning">
+                    整体采集状态异常：{snapshot.error}
+                    {snapshot.stale ? "（当前展示的是非实时缓存）" : ""}
+                  </InfoBanner>
+                ) : null}
+
+                <div className="detail-grid">
+                  <SnapshotSectionView
+                    title="系统信息"
+                    testId="system-section"
+                    section={sections?.system}
+                  >
+                    {(data) => (
+                      <DetailList
+                        items={[
+                          { label: "主机名", value: data.hostname },
+                          { label: "操作系统", value: data.os },
+                          { label: "内核", value: data.kernel },
+                          { label: "架构", value: data.arch },
+                          { label: "运行时长", value: formatDuration(data.uptimeSeconds) },
+                          { label: "启动时间", value: formatDateTime(data.bootTime) },
+                        ]}
+                      />
+                    )}
+                  </SnapshotSectionView>
+
+                  <SnapshotSectionView title="CPU" testId="cpu-section" section={sections?.cpu}>
+                    {(data) => (
+                      <div className="stack-sm">
+                        <UsageBar
+                          label="CPU 使用率"
+                          percent={data.usagePercent}
+                          testId="cpu-usage"
+                        />
+                        <DetailList
+                          items={[
+                            { label: "型号", value: data.model },
+                            { label: "核心数", value: data.cores },
+                            { label: "1 分钟负载", value: data.load1 ?? "—" },
+                            { label: "5 分钟负载", value: data.load5 ?? "—" },
+                            { label: "15 分钟负载", value: data.load15 ?? "—" },
+                          ]}
+                        />
+                      </div>
+                    )}
+                  </SnapshotSectionView>
+
+                  <SnapshotSectionView
+                    title="内存"
+                    testId="memory-section"
+                    section={sections?.memory}
+                  >
+                    {(data) => (
+                      <div className="stack-sm">
+                        <UsageBar
+                          label="内存使用率"
+                          percent={data.usedPercent}
+                          testId="memory-usage"
+                        />
+                        <DetailList
+                          items={[
+                            {
+                              label: "已用",
+                              value: formatBytes(
+                                Math.max(0, data.totalBytes - data.availableBytes),
+                              ),
+                            },
+                            { label: "总内存", value: formatBytes(data.totalBytes) },
+                            { label: "可用", value: formatBytes(data.availableBytes) },
+                            {
+                              label: "Swap",
+                              value:
+                                data.swapTotalBytes > 0
+                                  ? `${formatBytes(data.swapUsedBytes)} / ${formatBytes(
+                                      data.swapTotalBytes,
+                                    )}`
+                                  : "未启用",
+                            },
+                          ]}
+                        />
+                      </div>
+                    )}
+                  </SnapshotSectionView>
+
+                  <GpuCard section={sections?.gpu} />
+
+                  <SnapshotSectionView
+                    title="磁盘"
+                    testId="disks-section"
+                    section={sections?.disks}
+                    className="card--span-2"
+                  >
+                    {(data) =>
+                      data.mounts.length === 0 ? (
+                        <EmptyState title="没有可用的挂载点" />
+                      ) : (
+                        <div className="table-wrap">
+                          <table className="data-table">
+                            <caption className="sr-only">磁盘挂载点</caption>
+                            <thead>
+                              <tr>
+                                <th scope="col">挂载点</th>
+                                <th scope="col">文件系统</th>
+                                <th scope="col">总容量</th>
+                                <th scope="col">已用</th>
+                                <th scope="col">可用</th>
+                                <th scope="col">使用率</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {data.mounts.map((mount) => (
+                                <tr key={`${mount.mount}-${mount.filesystem}`}>
+                                  <td className="mono">{mount.mount}</td>
+                                  <td className="mono muted">{mount.filesystem}</td>
+                                  <td>{formatBytes(mount.totalBytes)}</td>
+                                  <td>{formatBytes(mount.usedBytes)}</td>
+                                  <td>{formatBytes(mount.freeBytes)}</td>
+                                  <td>
+                                    <div className="disk-usage">
+                                      <span
+                                        className={
+                                          (mount.usedPercent ?? 0) >= 90
+                                            ? "text-danger"
+                                            : (mount.usedPercent ?? 0) >= 75
+                                              ? "text-warning"
+                                              : undefined
+                                        }
+                                      >
+                                        {formatPercent(mount.usedPercent)}
+                                      </span>
+                                      <div
+                                        className="mini-track"
+                                        role="progressbar"
+                                        aria-label={`${mount.mount} 使用率`}
+                                        aria-valuemin={0}
+                                        aria-valuemax={100}
+                                        aria-valuenow={
+                                          mount.usedPercent === null
+                                            ? undefined
+                                            : Math.round(clampPercent(mount.usedPercent))
+                                        }
+                                        aria-valuetext={formatPercent(mount.usedPercent)}
+                                      >
+                                        <div
+                                          className={`mini-fill mini-fill--${
+                                            (mount.usedPercent ?? 0) >= 90
+                                              ? "danger"
+                                              : (mount.usedPercent ?? 0) >= 75
+                                                ? "warning"
+                                                : "ok"
+                                          }`}
+                                          style={{ width: `${clampPercent(mount.usedPercent)}%` }}
+                                        />
+                                      </div>
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )
+                    }
+                  </SnapshotSectionView>
+
+                  <SnapshotSectionView
+                    title="网络"
+                    testId="network-section"
+                    section={sections?.network}
+                    className="card--span-2"
+                  >
+                    {(data) => (
+                      <div className="stack-sm">
+                        <DetailList
+                          items={[
+                            { label: "默认接口", value: data.defaultInterface ?? "—" },
+                            { label: "网关", value: data.gateway ?? "—" },
+                            { label: "接口数量", value: data.interfaces.length },
+                          ]}
+                        />
+                        {data.interfaces.length === 0 ? (
+                          <EmptyState title="没有检测到网络接口" />
+                        ) : (
+                          <div className="table-wrap">
+                            <table className="data-table">
+                              <caption className="sr-only">网络接口</caption>
+                              <thead>
+                                <tr>
+                                  <th scope="col">接口</th>
+                                  <th scope="col">状态</th>
+                                  <th scope="col">速率</th>
+                                  <th scope="col">接收</th>
+                                  <th scope="col">发送</th>
+                                  <th scope="col">错误</th>
+                                  <th scope="col">地址</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {data.interfaces.map((iface) => (
+                                  <tr key={iface.name}>
+                                    <td className="mono">{iface.name}</td>
+                                    <td>
+                                      <StatusBadge
+                                        tone={iface.state === "up" ? "success" : "muted"}
+                                      >
+                                        {iface.state}
+                                      </StatusBadge>
+                                    </td>
+                                    <td>
+                                      {iface.speedMbps === null
+                                        ? "—"
+                                        : `${iface.speedMbps} Mbps`}
+                                    </td>
+                                    <td>{formatBytes(iface.rxBytes)}</td>
+                                    <td>{formatBytes(iface.txBytes)}</td>
+                                    <td>
+                                      <span
+                                        className={
+                                          (iface.rxErrors ?? 0) + (iface.txErrors ?? 0) > 0
+                                            ? "text-danger"
+                                            : undefined
+                                        }
+                                      >
+                                        {(iface.rxErrors ?? 0) + (iface.txErrors ?? 0)}
+                                      </span>
+                                    </td>
+                                    <td className="mono">
+                                      {iface.addresses.length > 0
+                                        ? iface.addresses.join(", ")
+                                        : "—"}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </SnapshotSectionView>
+
+                  <SnapshotSectionView
+                    title="服务"
+                    testId="services-section"
+                    section={sections?.services}
+                    className="card--span-2"
+                  >
+                    {(data) => (
+                      <ServicesTable
+                        info={data}
+                        exportPending={exportPending}
+                        onShowLogs={(unit) => setLogTarget({ unit })}
+                        onExportLogs={(unit) => void handleExportLogs(unit)}
+                        onServiceAction={requestServiceAction}
+                      />
+                    )}
+                  </SnapshotSectionView>
                 </div>
-              )}
-            </SnapshotSectionView>
+              </div>
+            ) : null}
+          </>
+        ) : null}
 
-            <GpuCard section={sections?.gpu} />
-
-            <SnapshotSectionView
-              title="磁盘"
-              testId="disks-section"
-              section={sections?.disks}
-              className="card--span-2"
-            >
-              {(data) =>
-                data.mounts.length === 0 ? (
-                  <EmptyState title="没有可用的挂载点" />
-                ) : (
-                  <div className="table-wrap">
-                    <table className="data-table">
-                      <caption className="sr-only">磁盘挂载点</caption>
-                      <thead>
-                        <tr>
-                          <th scope="col">挂载点</th>
-                          <th scope="col">文件系统</th>
-                          <th scope="col">总容量</th>
-                          <th scope="col">已用</th>
-                          <th scope="col">可用</th>
-                          <th scope="col">使用率</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {data.mounts.map((mount) => (
-                          <tr key={`${mount.mount}-${mount.filesystem}`}>
-                            <td className="mono">{mount.mount}</td>
-                            <td className="mono muted">{mount.filesystem}</td>
-                            <td>{formatBytes(mount.totalBytes)}</td>
-                            <td>{formatBytes(mount.usedBytes)}</td>
-                            <td>{formatBytes(mount.freeBytes)}</td>
-                            <td>
-                              <div className="disk-usage">
-                                <span
-                                  className={
-                                    (mount.usedPercent ?? 0) >= 90
-                                      ? "text-danger"
-                                      : (mount.usedPercent ?? 0) >= 75
-                                        ? "text-warning"
-                                        : undefined
-                                  }
-                                >
-                                  {formatPercent(mount.usedPercent)}
-                                </span>
-                                <div
-                                  className="mini-track"
-                                  role="progressbar"
-                                  aria-label={`${mount.mount} 使用率`}
-                                  aria-valuemin={0}
-                                  aria-valuemax={100}
-                                  aria-valuenow={
-                                    mount.usedPercent === null
-                                      ? undefined
-                                      : Math.round(clampPercent(mount.usedPercent))
-                                  }
-                                  aria-valuetext={formatPercent(mount.usedPercent)}
-                                >
-                                  <div
-                                    className={`mini-fill mini-fill--${
-                                      (mount.usedPercent ?? 0) >= 90
-                                        ? "danger"
-                                        : (mount.usedPercent ?? 0) >= 75
-                                          ? "warning"
-                                          : "ok"
-                                    }`}
-                                    style={{ width: `${clampPercent(mount.usedPercent)}%` }}
-                                  />
-                                </div>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )
-              }
-            </SnapshotSectionView>
-
-            <SnapshotSectionView
-              title="网络"
-              testId="network-section"
-              section={sections?.network}
-              className="card--span-2"
-            >
-              {(data) => (
-                <div className="stack-sm">
-                  <DetailList
-                    items={[
-                      { label: "默认接口", value: data.defaultInterface ?? "—" },
-                      { label: "网关", value: data.gateway ?? "—" },
-                      { label: "接口数量", value: data.interfaces.length },
-                    ]}
-                  />
-                  {data.interfaces.length === 0 ? (
-                    <EmptyState title="没有检测到网络接口" />
-                  ) : (
-                    <div className="table-wrap">
-                      <table className="data-table">
-                        <caption className="sr-only">网络接口</caption>
-                        <thead>
-                          <tr>
-                            <th scope="col">接口</th>
-                            <th scope="col">状态</th>
-                            <th scope="col">速率</th>
-                            <th scope="col">接收</th>
-                            <th scope="col">发送</th>
-                            <th scope="col">错误</th>
-                            <th scope="col">地址</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {data.interfaces.map((iface) => (
-                            <tr key={iface.name}>
-                              <td className="mono">{iface.name}</td>
-                              <td>
-                                <StatusBadge
-                                  tone={iface.state === "up" ? "success" : "muted"}
-                                >
-                                  {iface.state}
-                                </StatusBadge>
-                              </td>
-                              <td>
-                                {iface.speedMbps === null
-                                  ? "—"
-                                  : `${iface.speedMbps} Mbps`}
-                              </td>
-                              <td>{formatBytes(iface.rxBytes)}</td>
-                              <td>{formatBytes(iface.txBytes)}</td>
-                              <td>
-                                <span
-                                  className={
-                                    (iface.rxErrors ?? 0) + (iface.txErrors ?? 0) > 0
-                                      ? "text-danger"
-                                      : undefined
-                                  }
-                                >
-                                  {(iface.rxErrors ?? 0) + (iface.txErrors ?? 0)}
-                                </span>
-                              </td>
-                              <td className="mono">
-                                {iface.addresses.length > 0
-                                  ? iface.addresses.join(", ")
-                                  : "—"}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              )}
-            </SnapshotSectionView>
-
-            <SnapshotSectionView
-              title="服务"
-              testId="services-section"
-              section={sections?.services}
-              className="card--span-2"
-            >
-              {(data) => (
-                <ServicesTable
-                  info={data}
-                  exportPending={exportPending}
-                  onShowLogs={(unit) => setLogTarget({ unit })}
-                  onExportLogs={(unit) => void handleExportLogs(unit)}
-                  onServiceAction={requestServiceAction}
-                />
-              )}
-            </SnapshotSectionView>
-          </div>
-        </>
-      ) : null}
+        {activeTab === "metrics" ? <MetricsTab serverId={serverId} /> : null}
+        {activeTab === "gpu" ? <GpuTab serverId={serverId} /> : null}
+        {activeTab === "storage" ? (
+          <StorageTab
+            serverId={serverId}
+            mountSizes={mountSizes}
+            adoptedScanId={adoptedScanId}
+          />
+        ) : null}
+        {activeTab === "users" ? (
+          <UsersTab serverId={serverId} onScanStarted={handleUserScanStarted} />
+        ) : null}
+      </div>
 
       <ConfirmDialog
         open={pendingService !== null}
@@ -736,24 +792,6 @@ function SnapshotSectionView<T>({
         <SectionNotice status={status} error={section?.error ?? null} testId={`${testId}-notice`} />
       )}
     </SectionCard>
-  );
-}
-
-function SectionNotice({
-  status,
-  error,
-  testId,
-}: {
-  status: SectionStatus;
-  error: string | null;
-  testId: string;
-}) {
-  return (
-    <div className="section-notice" role="status" data-testid={testId}>
-      <p className="section-notice__title">{SECTION_STATUS_LABELS[status]}</p>
-      <p className="section-notice__text">{SECTION_STATUS_DESCRIPTIONS[status]}</p>
-      {error ? <p className="section-notice__error">原因：{error}</p> : null}
-    </div>
   );
 }
 

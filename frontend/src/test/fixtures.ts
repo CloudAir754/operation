@@ -226,3 +226,7 @@ export function makeSettings(overrides: Partial<Settings> = {}): Settings {
     ...overrides,
   };
 }
+
+// Stage-3 observability payload factories live in their own module and are
+// re-exported here so tests can import every fixture from one place.
+export * from "./observabilityFixtures";

@@ -200,9 +200,11 @@ def build_create_user_script(spec: UserSpec, credential_path: str) -> str:
 login={login}
 cred={credential}
 if getent passwd "$login" >/dev/null 2>&1; then echo LABOPS_RESULT=exists; exit 0; fi
-if ! useradd {" ".join(args)} "$login" 2>/tmp/labops-useradd.err; then
+err=$(mktemp /tmp/labops-useradd.XXXXXXXX) || exit 1
+trap 'rm -f -- "$err"' EXIT
+if ! useradd {" ".join(args)} "$login" 2>"$err"; then
   echo LABOPS_RESULT=useradd_failed
-  sed -n '1p' /tmp/labops-useradd.err 2>/dev/null
+  sed -n '1p' "$err" 2>/dev/null
   exit 0
 fi
 password=$(cat "$cred" 2>/dev/null || true)

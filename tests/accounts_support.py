@@ -108,6 +108,8 @@ class FakeRemote:
             }
         )
         self.last_stdin = stdin_data
+        if command.startswith("sudo -S -p '' -- sh -c "):
+            command = shlex.split(command)[-1]
         match = _PROBE_CALL.search(command)
         if match is not None:
             return self._probe(match.group("mode"), match.group("args"))

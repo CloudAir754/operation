@@ -48,4 +48,6 @@ Treat `docs/requirements/` as the source of product decisions. Update the releva
 
 ## Git Branching
 
+After completing a focused change, run the relevant checks and review the diff for correctness and sensitive data. When checks pass, automatically create a local commit on the working branch without asking for additional confirmation. If checks fail or cannot run, report the limitation instead of claiming validation passed. Keep unrelated existing changes in separate commits only when the user authorizes saving them. Push branches and create pull requests when requested by the user; do not automatically merge.
+
 Every new feature, bug fix, documentation change, refactor, or other focused change must be developed on its own branch. Use a managed prefix followed by a short kebab-case name, for example `feat/host-import`, `bug-fix/frontend-port`, `docs/update-runbook`, `refactor/task-manager`, or `chore/refresh-dependencies`. Keep the default branch reserved for reviewed, integrated changes; do not make routine implementation commits directly on it.

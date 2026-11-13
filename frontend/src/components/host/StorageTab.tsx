@@ -574,7 +574,9 @@ export function ScanResultView({
 
   const rootPath = tree.byPath.has(currentPath) ? currentPath : tree.root?.path ?? scan.mount;
   const rootNode = tree.byPath.get(rootPath) ?? null;
-  const currentChildren = childrenOf(tree, rootPath);
+  const currentChildren = [...childrenOf(tree, rootPath)].sort(
+    (a, b) => nodeSize(b) - nodeSize(a) || a.path.localeCompare(b.path),
+  );
   const crumbs = breadcrumbTrail(scan.mount, rootPath);
   const rects = useMemo(
     () =>
@@ -650,6 +652,27 @@ export function ScanResultView({
               · {rootNode ? `${formatBytes(nodeSize(rootNode))} 已分配` : "根节点尚未返回"}
             </span>
           </nav>
+
+          <section className="stack-sm" aria-label="空间占用排行">
+            <p className="subheading">空间占用排行 · 前 10 项</p>
+            <p className="muted">按已分配空间排序，占比相对于当前目录；扫描不完整时仅代表已采集结果。</p>
+            {currentChildren.slice(0, 10).map((node) => {
+              const total = rootNode ? nodeSize(rootNode) : 0;
+              const percent = total > 0 ? Math.min(100, Math.max(0, nodeSize(node) / total * 100)) : 0;
+              return (
+                <div key={node.path} className="stack-sm">
+                  <div className="chip-row">
+                    {node.kind === "dir" ? (
+                      <button type="button" className="link-button mono" onClick={() => setCurrentPath(node.path)}>{node.name}</button>
+                    ) : <span className="mono">{node.name}</span>}
+                    <span>{formatBytesOrNa(node.allocatedBytes)} · {total > 0 ? `${percent.toFixed(1)}%` : "占比未知"}</span>
+                    <NodeStatusBadges node={node} />
+                  </div>
+                  <meter min={0} max={100} value={percent} aria-label={`${node.name} 占当前目录比例`} style={{ width: "100%" }} />
+                </div>
+              );
+            })}
+          </section>
 
           <svg
             className="treemap"

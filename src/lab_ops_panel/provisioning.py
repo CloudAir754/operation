@@ -292,7 +292,7 @@ class ProvisioningService:
                 raise ApiError(409, "sudo_password_missing", "未保存 sudo 密码，无法提权执行")
             if stdin_data is not None:
                 raise ApiError(500, "step_stdin_conflict", "sudo 步骤不能同时携带标准输入负载")
-            command = f"sudo -S -p '' {command}"
+            command = f"sudo -S -p '' -- sh -c {quote(command)}"
             payload = (password + "\n").encode("utf-8")
         try:
             result = self._transport.run(

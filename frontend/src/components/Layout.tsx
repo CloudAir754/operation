@@ -1,3 +1,4 @@
+import { PageIndex } from "./PageIndex";
 import { Link, NavLink, Outlet } from "react-router-dom";
 
 interface NavItem {
@@ -86,7 +87,10 @@ export function Layout() {
           <span className="topbar__meta">API · 127.0.0.1:8765</span>
         </div>
         <main id="main-content" className="page">
-          <Outlet />
+          <div className="page-with-index">
+            <div id="page-sections" className="page-sections"><Outlet /></div>
+            <PageIndex />
+          </div>
         </main>
       </div>
     </div>

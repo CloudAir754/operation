@@ -1,3 +1,6 @@
+import { getMounts, getSnapshot } from "../../../api/client";
+import type { MountInfo, DiskMount } from "../../../api/types";
+import { formatBytes } from "../../../lib/format";
 import { useCallback, useEffect, useState } from "react";
 import type { Dataset, StorageSettings } from "../../../api/accounts";
 import {
@@ -33,6 +36,26 @@ export function DatasetCard({
   onSettingsSaved,
   hasSudoPassword,
 }: DatasetCardProps) {
+  const [mounts, setMounts] = useState<MountInfo[]>([]);
+  const [capacities, setCapacities] = useState<DiskMount[]>([]);
+  const [diskError, setDiskError] = useState<string | null>(null);
+  const [diskLoading, setDiskLoading] = useState(false);
+  const loadDisks = useCallback(async () => {
+    setDiskLoading(true);
+    setDiskError(null);
+    try {
+      const result = await getMounts(serverId);
+      setMounts(result.mounts);
+      if (result.error) setDiskError(result.error);
+      const snapshot = await getSnapshot(serverId);
+      setCapacities(snapshot.data.disks.data?.mounts ?? []);
+    } catch (reason) {
+      setDiskError(describeError(reason));
+    } finally {
+      setDiskLoading(false);
+    }
+  }, [serverId]);
+  useEffect(() => { void loadDisks(); }, [loadDisks]);
   const [dataRoot, setDataRoot] = useState(settings?.dataRoot ?? "");
   const [migrationRoot, setMigrationRoot] = useState(settings?.migrationRoot ?? "");
   const [settingsPending, setSettingsPending] = useState(false);
@@ -132,6 +155,28 @@ export function DatasetCard({
       <div className="stack">
         {settingsError ? <ErrorBanner title="无法保存路径设置" message={settingsError} /> : null}
         {message ? <SuccessBanner message={message} /> : null}
+
+        <div className="stack">
+          <h3>已挂载磁盘</h3>
+          <p className="form-hint">无需扫描文件即可查看。仅可写的本地 ext4 支持分配空间；未挂载硬盘不在此列表中。</p>
+          <button type="button" className="btn btn--ghost" disabled={diskLoading} onClick={() => void loadDisks()}>
+            {diskLoading ? "读取中…" : "刷新磁盘列表"}
+          </button>
+          {diskError ? <ErrorBanner title="磁盘信息读取异常" message={diskError} /> : null}
+          {!diskLoading && !mounts.length ? <EmptyState title="暂无已挂载磁盘信息" /> : null}
+          {mounts.length ? <div className="table-scroll"><table>
+            <thead><tr><th>挂载路径</th><th>设备</th><th>文件系统</th><th>总容量</th><th>可用空间</th><th>操作</th></tr></thead>
+            <tbody>{mounts.map((mount) => {
+              const capacity = capacities.find((item) => item.mount === mount.mount);
+              const eligible = mount.device?.startsWith("/dev/") && mount.filesystem === "ext4" && !mount.readOnly;
+              return <tr key={mount.mount}>
+                <td>{mount.mount}</td><td>{mount.device ?? "—"}</td><td>{mount.filesystem ?? "—"}{mount.readOnly ? "（只读）" : ""}</td>
+                <td>{capacity ? formatBytes(capacity.totalBytes) : "—"}</td><td>{capacity ? formatBytes(capacity.freeBytes) : "—"}</td>
+                <td><button type="button" className="btn btn--ghost" disabled={!eligible} onClick={() => setDataRoot(mount.mount)}>{dataRoot === mount.mount ? "已选择" : "选择此盘"}</button></td>
+              </tr>;
+            })}</tbody>
+          </table></div> : null}
+        </div>
 
         {!settings ? (
           <LoadingBlock label="正在读取路径设置…" />

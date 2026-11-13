@@ -1843,7 +1843,7 @@ def main():
     elif mode == "tree_stats":
         payload["treeStats"] = collect_tree_stats(sys.argv[2] if len(sys.argv) > 2 else "/")
     elif mode == "dataset_inspect":
-        arguments = (sys.argv[2:5] + [""] * 3)[:3]
+        arguments = (sys.argv[2:6] + [""] * 4)[:4]
         payload["datasetInspect"] = collect_dataset_inspect(*arguments)
     elif mode == "account_info":
         payload["accountInfo"] = collect_account_info(sys.argv[2] if len(sys.argv) > 2 else "")
